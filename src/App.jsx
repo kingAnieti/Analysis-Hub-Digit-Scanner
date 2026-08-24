@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
 
-// App ID directly from your Deriv Developer Portal
 const APP_ID = "34cqHOYTzkye6dCyuLe1T";
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
@@ -16,11 +15,15 @@ const SYNTHETIC_MARKETS = [
 const TAPE_LENGTH = 28;
 
 export default function App() {
-  const [tokenInput, setTokenInput] = useState("");
+  // Credentials Form State
+  const [loginIdInput, setLoginIdInput] = useState("");
+  const [serverInput, setServerInput] = useState("Deriv-Server");
+  const [passwordTokenInput, setPasswordTokenInput] = useState("");
   const [accountTypeInput, setAccountTypeInput] = useState("DEMO");
-  const [savedTokens, setSavedTokens] = useState([]);
-
+  
+  const [savedAccounts, setSavedAccounts] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState(null);
+  
   const [balance, setBalance] = useState("0.00");
   const [currency, setCurrency] = useState("USD");
 
@@ -42,76 +45,73 @@ export default function App() {
   const [digitTape, setDigitTape] = useState([]);
 
   const [connError, setConnError] = useState("");
-  const [connStatus, setConnStatus] = useState("idle"); // idle | connecting | open | authorized | closed | error
+  const [connStatus, setConnStatus] = useState("idle");
 
   const ws = useRef(null);
 
-  // Load saved tokens on initial load
+  // Load saved accounts from storage
   useEffect(() => {
-    const stored = localStorage.getItem("deriv_direct_tokens");
+    const stored = localStorage.getItem("deriv_full_credentials");
     if (stored) {
-      const parsed = JSON.parse(stored);
-      setSavedTokens(parsed);
-      if (parsed.length > 0) {
-        setSelectedAccount(parsed[0]);
+      try {
+        const parsed = JSON.parse(stored);
+        setSavedAccounts(parsed);
+        if (parsed.length > 0) {
+          setSelectedAccount(parsed[0]);
+        }
+      } catch (e) {
+        console.error("Failed to load saved accounts", e);
       }
     }
   }, []);
 
-  // Connect & fetch active account details directly from WebSocket
+  // Connect WebSocket when account changes
   useEffect(() => {
     if (!selectedAccount?.token) return;
 
     setConnError("");
     setConnStatus("connecting");
     setDigitTape([]);
-    console.log("[Deriv] Opening WebSocket:", WS_URL);
+
+    if (ws.current) ws.current.close();
 
     ws.current = new WebSocket(WS_URL);
 
     ws.current.onopen = () => {
-      console.log("[Deriv] Socket opened, sending authorize...");
       setConnStatus("open");
       ws.current.send(JSON.stringify({ authorize: selectedAccount.token }));
     };
 
     ws.current.onerror = (err) => {
-      console.error("[Deriv] WebSocket error:", err);
+      console.error("[Deriv WS Error]", err);
       setConnStatus("error");
-      setConnError(
-        "WebSocket failed to connect. This is usually a network/firewall/ad-blocker issue blocking wss://ws.derivws.com, not a token problem."
-      );
+      setConnError("WebSocket failed to connect. Check network connection or firewall permissions for wss://ws.derivws.com.");
     };
 
-    ws.current.onclose = (event) => {
-      console.warn("[Deriv] WebSocket closed:", event.code, event.reason);
+    ws.current.onclose = () => {
       setConnStatus((prev) => (prev === "authorized" ? "closed" : prev));
     };
 
     ws.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      console.log("[Deriv] Received:", data.msg_type, data);
 
       if (data.msg_type === "authorize") {
         if (data.error) {
-          console.error("[Deriv] Auth failed:", data.error);
           setConnStatus("error");
-          setConnError(
-            `Auth failed: ${data.error.message} (code: ${data.error.code}). ` +
-            `Double-check you pasted a personal API token from app.deriv.com \u2192 Account Settings \u2192 API token \u2014 not the App ID from the Deriv API developer portal.`
-          );
+          setConnError(`Auth Failed: ${data.error.message} (${data.error.code})`);
           setSelectedAccount(null);
           return;
         }
-        setConnStatus("authorized");
 
+        setConnStatus("authorized");
         const auth = data.authorize;
         setBalance(Number(auth.balance).toFixed(2));
         setCurrency(auth.currency || "USD");
 
+        // Update active profile details
         setSelectedAccount((prev) => ({
           ...prev,
-          loginId: auth.loginid,
+          loginId: auth.loginid || prev.loginId,
           email: auth.email
         }));
 
@@ -169,22 +169,25 @@ export default function App() {
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
-  const handleDirectConnect = (e) => {
+  // Connect via Login ID, Server, and Password/Token
+  const handleConnectAccount = (e) => {
     e.preventDefault();
-    if (!tokenInput.trim()) return;
+    if (!passwordTokenInput.trim()) return;
 
     const newAcc = {
-      token: tokenInput.trim(),
+      loginId: loginIdInput.trim() || `${accountTypeInput} Account`,
+      server: serverInput,
+      token: passwordTokenInput.trim(),
       type: accountTypeInput,
-      loginId: accountTypeInput === "DEMO" ? "DEMO Account" : "REAL Account"
     };
 
-    const updatedTokens = [newAcc, ...savedTokens.filter((t) => t.token !== newAcc.token)];
-    setSavedTokens(updatedTokens);
-    localStorage.setItem("deriv_direct_tokens", JSON.stringify(updatedTokens));
+    const updated = [newAcc, ...savedAccounts.filter((a) => a.loginId !== newAcc.loginId)];
+    setSavedAccounts(updated);
+    localStorage.setItem("deriv_full_credentials", JSON.stringify(updated));
 
     setSelectedAccount(newAcc);
-    setTokenInput("");
+    setLoginIdInput("");
+    setPasswordTokenInput("");
   };
 
   const openDTrader = () => {
@@ -209,7 +212,8 @@ export default function App() {
     setScanProgress(0);
     setTerminalLogs([]);
 
-    addLog(`ACCOUNT   ${selectedAccount?.loginId || selectedAccount?.type}`);
+    addLog(`ACCOUNT   ${selectedAccount?.loginId}`);
+    addLog(`SERVER    ${selectedAccount?.server || "Deriv-Server"}`);
     addLog(`MARKET    ${marketMode === "single" ? selectedMarket : "MULTI-ARRAY"}`);
 
     let progress = 0;
@@ -303,18 +307,18 @@ export default function App() {
 
           {selectedAccount ? (
             <div className="flex items-center gap-2">
-              {savedTokens.length > 1 && (
+              {savedAccounts.length > 1 && (
                 <select
-                  value={selectedAccount.token}
+                  value={selectedAccount.loginId}
                   onChange={(e) => {
-                    const acc = savedTokens.find((t) => t.token === e.target.value);
+                    const acc = savedAccounts.find((a) => a.loginId === e.target.value);
                     if (acc) setSelectedAccount(acc);
                   }}
                   className="bg-panel border border-hairline text-[10px] font-mono font-bold text-gold rounded p-1.5 focus:outline-none"
                 >
-                  {savedTokens.map((acc, idx) => (
-                    <option key={idx} value={acc.token}>
-                      {acc.type}: {acc.loginId || "Account"}
+                  {savedAccounts.map((acc, idx) => (
+                    <option key={idx} value={acc.loginId}>
+                      {acc.type}: {acc.loginId}
                     </option>
                   ))}
                 </select>
@@ -337,52 +341,71 @@ export default function App() {
         </div>
       </header>
 
-      {/* Token connect panel */}
+      {/* Account Login, Server & Password Input Panel */}
       {!selectedAccount && (
         <div className="bg-surface border border-hairline p-4 m-3 rounded-lg max-w-lg mx-auto w-full space-y-3">
-          <div className="flex justify-between items-center">
-            <h2 className="text-[11px] font-display font-bold text-gold uppercase tracking-wider">Connect Account</h2>
-            <span className="text-[10px] text-muted font-mono">no redirect required</span>
+          <div className="flex justify-between items-center border-b border-hairline pb-2">
+            <h2 className="text-[11px] font-display font-bold text-gold uppercase tracking-wider">Account Credentials</h2>
+            <span className="text-[10px] text-muted font-mono">Direct Connection</span>
           </div>
 
-          <form onSubmit={handleDirectConnect} className="flex gap-2">
-            <select
-              value={accountTypeInput}
-              onChange={(e) => setAccountTypeInput(e.target.value)}
-              className="bg-panel border border-hairline text-xs text-gold font-mono font-bold rounded px-2"
-            >
-              <option value="DEMO">DEMO</option>
-              <option value="REAL">REAL</option>
-            </select>
+          <form onSubmit={handleConnectAccount} className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] text-muted uppercase font-mono mb-1">Account Type</label>
+                <select
+                  value={accountTypeInput}
+                  onChange={(e) => setAccountTypeInput(e.target.value)}
+                  className="w-full bg-panel border border-hairline text-xs text-gold font-mono font-bold rounded p-2 focus:outline-none focus:border-gold"
+                >
+                  <option value="DEMO">DEMO</option>
+                  <option value="REAL">REAL</option>
+                </select>
+              </div>
 
-            <input
-              type="text"
-              placeholder="Paste your personal API token from app.deriv.com \u2192 Settings \u2192 API token"
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              className="flex-1 bg-panel border border-hairline p-2 text-xs font-mono rounded focus:outline-none focus:border-gold"
-            />
+              <div>
+                <label className="block text-[10px] text-muted uppercase font-mono mb-1">Server</label>
+                <select
+                  value={serverInput}
+                  onChange={(e) => setServerInput(e.target.value)}
+                  className="w-full bg-panel border border-hairline text-xs text-ink font-mono rounded p-2 focus:outline-none focus:border-gold"
+                >
+                  <option value="Deriv-Server">Deriv-Server</option>
+                  <option value="Deriv-Server-02">Deriv-Server-02</option>
+                  <option value="Deriv-Demo">Deriv-Demo</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] text-muted uppercase font-mono mb-1">Login ID / CR Account Number</label>
+              <input
+                type="text"
+                placeholder="e.g. CR1234567 or VRTC123456"
+                value={loginIdInput}
+                onChange={(e) => setLoginIdInput(e.target.value)}
+                className="w-full bg-panel border border-hairline p-2 text-xs font-mono rounded focus:outline-none focus:border-gold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] text-muted uppercase font-mono mb-1">Account Password / API Token</label>
+              <input
+                type="password"
+                placeholder="Enter password or API Token"
+                value={passwordTokenInput}
+                onChange={(e) => setPasswordTokenInput(e.target.value)}
+                className="w-full bg-panel border border-hairline p-2 text-xs font-mono rounded focus:outline-none focus:border-gold"
+              />
+            </div>
 
             <button
               type="submit"
-              className="bg-gold hover:bg-gold-bright text-void font-display font-bold px-4 py-2 rounded text-xs transition"
+              className="w-full bg-gold hover:bg-gold-bright text-void font-display font-bold py-2.5 rounded text-xs transition"
             >
-              CONNECT
+              CONNECT TERMINAL
             </button>
           </form>
-
-          <p className="text-[10px] text-muted leading-relaxed">
-            Get this token at{" "}
-            <a
-              href="https://app.deriv.com/account/api-token"
-              target="_blank"
-              rel="noreferrer"
-              className="text-gold underline"
-            >
-              app.deriv.com/account/api-token
-            </a>{" "}
-            &mdash; check the "Trade" scope when creating it. This is different from the App ID/App Secret in the developer portal.
-          </p>
         </div>
       )}
 
@@ -415,7 +438,7 @@ export default function App() {
       {/* Main workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
 
-        {/* Signature: Digit Tape */}
+        {/* Digit Tape */}
         <div className="bg-surface border border-hairline rounded-lg p-3 space-y-2">
           <div className="flex justify-between items-center text-[10px] font-display font-bold text-muted uppercase tracking-wide">
             <span>Digit Tape &middot; last {TAPE_LENGTH} ticks</span>
@@ -540,7 +563,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* Scanner dialog */}
+      {/* Scanner Modal */}
       {isScannerOpen && (
         <div className="fixed inset-0 bg-void/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-surface border border-gold/30 rounded-xl max-w-sm w-full p-5 shadow-2xl">
@@ -608,7 +631,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Summary modal */}
+      {/* Summary Modal */}
       {showSummaryModal && (
         <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-surface border border-gold/30 rounded-xl p-6 max-w-xs w-full text-center space-y-3">
