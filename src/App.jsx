@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
 
-// Register your App ID on developers.deriv.com with redirect URL matching your site
-const APP_ID = "34cqHOYTzkye6dCyuLelT"; // Replace 61223 with your real App ID from developers.deriv.com
+// App ID directly from your Deriv Developer Portal
+const APP_ID = "34cqHOYTzkye6dCyuLe1T";
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
 const SYNTHETIC_MARKETS = [
-  { symbol: "R_10", name: "Volatility 10 Index" },
-  { symbol: "R_25", name: "Volatility 25 Index" },
-  { symbol: "R_50", name: "Volatility 50 Index" },
-  { symbol: "R_75", name: "Volatility 75 Index" },
+  { symbol: "1HZ100V", name: "Volatility 100 (1s) Index" },
   { symbol: "R_100", name: "Volatility 100 Index" },
+  { symbol: "R_75", name: "Volatility 75 Index" },
+  { symbol: "R_50", name: "Volatility 50 Index" },
+  { symbol: "R_25", name: "Volatility 25 Index" },
+  { symbol: "R_10", name: "Volatility 10 Index" },
 ];
 
 export default function App() {
@@ -19,7 +20,7 @@ export default function App() {
   const [currency, setCurrency] = useState("USD");
 
   const [marketMode, setMarketMode] = useState("single");
-  const [selectedMarket, setSelectedMarket] = useState("R_100");
+  const [selectedMarket, setSelectedMarket] = useState("1HZ100V");
 
   const [activeTab, setActiveTab] = useState("bulk");
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -35,7 +36,7 @@ export default function App() {
 
   const ws = useRef(null);
 
-  // Parse Client IDs and Tokens from URL on OAuth Redirect
+  // Extract Accounts & Session Tokens from Deriv OAuth Redirect
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const parsedAccounts = [];
@@ -56,7 +57,9 @@ export default function App() {
     if (parsedAccounts.length > 0) {
       localStorage.setItem("deriv_oauth_accounts", JSON.stringify(parsedAccounts));
       setAccounts(parsedAccounts);
-      setSelectedAccount(parsedAccounts[0]);
+      // Default to DEMO account if available
+      const demoAcc = parsedAccounts.find(a => a.type === "DEMO") || parsedAccounts[0];
+      setSelectedAccount(demoAcc);
       window.history.replaceState({}, document.title, window.location.pathname);
     } else {
       const stored = localStorage.getItem("deriv_oauth_accounts");
@@ -68,7 +71,7 @@ export default function App() {
     }
   }, []);
 
-  // Connect to WebSocket using current Selected Account Client ID Session Token
+  // Connect WebSocket when account or market changes
   useEffect(() => {
     if (!selectedAccount) return;
 
@@ -83,7 +86,7 @@ export default function App() {
 
       if (data.msg_type === "authorize") {
         if (data.error) {
-          alert(`Auth Error for ${selectedAccount.loginId}: ${data.error.message}`);
+          alert(`Auth Error: ${data.error.message}`);
           return;
         }
 
@@ -136,9 +139,22 @@ export default function App() {
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
+  // Triggers OAuth Login on Deriv
   const handleOAuthLogin = () => {
-    const redirectUrl = encodeURIComponent(window.location.origin);
+    const redirectUrl = encodeURIComponent("https://analysis-hub-digit-scanner.vercel.app");
     window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=EN&redirect_uri=${redirectUrl}`;
+  };
+
+  // Directly launches DTrader configured with Volatility 100 (1s) Index (1HZ100V)
+  const openDTrader = () => {
+    const symbol = selectedMarket || "1HZ100V";
+    let dTraderUrl = `https://dtrader.deriv.com/?chart_type=area&interval=1t&symbol=${symbol}`;
+    
+    if (selectedAccount) {
+      dTraderUrl += `&account=${selectedAccount.loginId}&token1=${selectedAccount.token}`;
+    }
+    
+    window.open(dTraderUrl, "_blank");
   };
 
   const handleDisconnect = () => {
@@ -154,23 +170,22 @@ export default function App() {
     setScanProgress(0);
     setTerminalLogs([]);
 
-    addLog(`[INFO] Active Client ID: ${selectedAccount?.loginId}`);
-    addLog(`[INFO] Operating Mode: ${selectedAccount?.type} OPTIONS`);
-    addLog(`[INFO] Market Mode: ${marketMode === "single" ? selectedMarket : "Multi-Synthetic Array"}`);
+    addLog(`[INFO] Active Account: ${selectedAccount?.loginId} (${selectedAccount?.type})`);
+    addLog(`[INFO] Market: ${marketMode === "single" ? selectedMarket : "Multi-Array"}`);
 
     let progress = 0;
     const interval = setInterval(() => {
       progress += 20;
       setScanProgress(progress);
 
-      if (progress === 40) addLog("[INFO] Reading volatility index stream...");
-      if (progress === 60) addLog("[WARNING] Market signal confirmed");
-      if (progress === 80) addLog("[INFO] Arming Digit Under 6 options...");
+      if (progress === 40) addLog("[INFO] Reading digit stream...");
+      if (progress === 60) addLog("[WARNING] Signal verified");
+      if (progress === 80) addLog("[INFO] Calibrating Digit Under 6...");
 
       if (progress >= 100) {
         clearInterval(interval);
         addLog("[OK] Strategy Armed");
-        addLog(`[INFO] Sending ${bulkTrades} bulk option contracts...`);
+        addLog(`[INFO] Sending ${bulkTrades} bulk options...`);
 
         setTimeout(() => {
           setIsScanning(false);
@@ -217,56 +232,67 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0b0e] text-white font-sans flex flex-col justify-between selection:bg-cyan-500 selection:text-black">
-      {/* Top Main Navigation Header */}
-      <header className="flex justify-between items-center px-4 py-3 bg-[#111318] border-b border-cyan-900/40 shadow-lg shadow-cyan-950/20">
+      {/* Top Navigation Header */}
+      <header className="flex justify-between items-center px-4 py-3 bg-[#111318] border-b border-cyan-900/40">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-black text-sm tracking-tighter shadow-md shadow-cyan-500/20">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-black text-sm">
             HH
           </div>
           <div>
             <h1 className="text-xs font-black tracking-widest text-cyan-400 uppercase">Deriv Analysis Hub</h1>
-            <p className="text-[10px] text-neutral-500 font-mono">v3.0 • OAUTH CLIENT MATRIX</p>
+            <p className="text-[10px] text-neutral-500 font-mono">v3.2 • DTRADER READY</p>
           </div>
         </div>
 
-        {/* Client ID Account Selection Dropdown & Balance Display */}
-        {selectedAccount ? (
-          <div className="flex items-center gap-2">
-            <select
-              value={selectedAccount.loginId}
-              onChange={(e) => {
-                const acc = accounts.find((a) => a.loginId === e.target.value);
-                if (acc) setSelectedAccount(acc);
-              }}
-              className="bg-[#181c26] border border-neutral-800 text-[10px] font-mono font-bold text-cyan-400 rounded-lg p-1.5 focus:outline-none"
-            >
-              {accounts.map((acc) => (
-                <option key={acc.loginId} value={acc.loginId}>
-                  {acc.type}: {acc.loginId}
-                </option>
-              ))}
-            </select>
-
-            <div className="flex items-center gap-2 bg-[#161922] px-3 py-1.5 rounded-full border border-neutral-800">
-              <span className={`w-2 h-2 rounded-full ${selectedAccount.type === "DEMO" ? "bg-amber-400" : "bg-green-500"} animate-pulse`}></span>
-              <span className="text-xs font-mono font-bold text-white">
-                ${balance} <span className="text-neutral-500">{currency}</span>
-              </span>
-              <button onClick={handleDisconnect} className="ml-1 text-[10px] text-red-400 hover:underline">Exit</button>
-            </div>
-          </div>
-        ) : (
+        <div className="flex items-center gap-2">
+          {/* Direct Open DTrader Button */}
           <button
-            onClick={handleOAuthLogin}
-            className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 px-4 py-1.5 rounded text-xs font-bold shadow-lg shadow-red-950/50 transition"
+            onClick={openDTrader}
+            className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-3 py-1.5 rounded text-[11px] font-bold font-mono transition flex items-center gap-1"
           >
-            CONNECT DERIV
+            <span>OPEN DTRADER</span>
+            <span className="text-[10px]">↗</span>
           </button>
-        )}
+
+          {/* Account Selector or Login Button */}
+          {selectedAccount ? (
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedAccount.loginId}
+                onChange={(e) => {
+                  const acc = accounts.find((a) => a.loginId === e.target.value);
+                  if (acc) setSelectedAccount(acc);
+                }}
+                className="bg-[#181c26] border border-neutral-800 text-[10px] font-mono font-bold text-cyan-400 rounded-lg p-1.5 focus:outline-none"
+              >
+                {accounts.map((acc) => (
+                  <option key={acc.loginId} value={acc.loginId}>
+                    {acc.type}: {acc.loginId}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex items-center gap-2 bg-[#161922] px-3 py-1.5 rounded-full border border-neutral-800">
+                <span className={`w-2 h-2 rounded-full ${selectedAccount.type === "DEMO" ? "bg-amber-400" : "bg-green-500"} animate-pulse`}></span>
+                <span className="text-xs font-mono font-bold text-white">
+                  ${balance} <span className="text-neutral-500">{currency}</span>
+                </span>
+                <button onClick={handleDisconnect} className="ml-1 text-[10px] text-red-400 hover:underline">Exit</button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={handleOAuthLogin}
+              className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 px-4 py-1.5 rounded text-xs font-bold transition shadow-lg shadow-red-950/50"
+            >
+              CONNECT DERIV
+            </button>
+          )}
+        </div>
       </header>
 
-      {/* Sub-Header Navigation */}
-      <nav className="flex bg-[#111318] border-b border-neutral-800/80 text-xs font-semibold">
+      {/* Sub Header Tabs */}
+      <nav className="flex bg-[#111318] border-b border-neutral-800 text-xs font-semibold">
         {["Quick strategy", "Bulk Trader", "Manual Trader", "Copy Trading"].map((tab) => (
           <button
             key={tab}
@@ -282,12 +308,11 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Main Workspace */}
+      {/* Main Content Workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
-        {/* Synthetic Market Selector */}
         <div className="bg-[#12151c] border border-neutral-800 rounded-xl p-3 space-y-2">
-          <div className="flex justify-between items-center text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
-            <span>Synthetic Options Target</span>
+          <div className="flex justify-between items-center text-[10px] font-bold text-neutral-400 uppercase">
+            <span>Symbol Selection</span>
             <div className="flex bg-[#181c26] p-0.5 rounded border border-neutral-800 font-mono">
               <button
                 onClick={() => setMarketMode("single")}
@@ -309,16 +334,14 @@ export default function App() {
               <select
                 value={selectedMarket}
                 onChange={(e) => setSelectedMarket(e.target.value)}
-                className="bg-[#181c26] border border-neutral-800 text-cyan-400 text-xs font-bold rounded-lg p-2 focus:outline-none focus:border-cyan-400"
+                className="bg-[#181c26] border border-neutral-800 text-cyan-400 text-xs font-bold rounded-lg p-2 focus:outline-none"
               >
                 {SYNTHETIC_MARKETS.map((m) => (
                   <option key={m.symbol} value={m.symbol}>{m.name}</option>
                 ))}
               </select>
             ) : (
-              <div className="text-xs text-cyan-400 font-mono font-bold">
-                Multi-Array Active (V10 ➔ V100)
-              </div>
+              <div className="text-xs text-cyan-400 font-mono font-bold">Multi-Array Active (V10 ➔ V100 1s)</div>
             )}
 
             <div className="text-right">
@@ -328,10 +351,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* AI Scanner Trigger */}
         <button
           onClick={() => setIsScannerOpen(true)}
-          className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-black py-3.5 rounded-xl text-sm tracking-wider shadow-lg shadow-cyan-500/20 active:scale-[0.99] transition flex items-center justify-center gap-2"
+          className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-black font-black py-3.5 rounded-xl text-sm shadow-lg shadow-cyan-500/20 transition flex items-center justify-center gap-2"
         >
           <span className="w-2 h-2 rounded-full bg-black animate-ping"></span>
           AI SCANNER & BULK TRADER
@@ -343,14 +365,13 @@ export default function App() {
             <span className="text-xs font-bold text-neutral-300">
               Transactions ({selectedAccount ? selectedAccount.loginId : "Disconnected"})
             </span>
-            <button onClick={() => setTrades([])} className="bg-neutral-800 px-2 py-1 rounded text-neutral-400 text-[10px] hover:text-white">Reset</button>
+            <button onClick={() => setTrades([])} className="bg-neutral-800 px-2 py-1 rounded text-neutral-400 text-[10px]">Reset</button>
           </div>
 
-          <div className="flex-1 overflow-y-auto max-h-64 space-y-1.5 pr-1 font-mono text-xs">
+          <div className="flex-1 overflow-y-auto max-h-64 space-y-1.5 font-mono text-xs pr-1">
             {trades.length === 0 ? (
               <div className="h-40 flex flex-col items-center justify-center text-neutral-600 text-xs">
                 <p>No active session trades</p>
-                <p className="text-[10px] text-neutral-700">Run scanner to trigger bulk options</p>
               </div>
             ) : (
               trades.map((t, idx) => (
@@ -365,10 +386,9 @@ export default function App() {
             )}
           </div>
 
-          {/* Metrics Footer */}
           <div className="grid grid-cols-4 gap-1 pt-3 border-t border-neutral-800 mt-2 text-center text-[10px] font-mono">
             <div className="bg-[#181c26] p-2 rounded-lg">
-              <p className="text-neutral-500">Total Stake</p>
+              <p className="text-neutral-500">Stake</p>
               <p className="font-bold text-white mt-0.5">${summary.totalStake.toFixed(2)}</p>
             </div>
             <div className="bg-[#181c26] p-2 rounded-lg">
@@ -389,18 +409,13 @@ export default function App() {
         </div>
       </main>
 
-      {/* AI Matrix Scanner Drawer */}
+      {/* AI Scanner Modal */}
       {isScannerOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 font-mono">
           <div className="bg-[#0b0d12] border border-cyan-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl">
             <div className="flex justify-between items-center mb-4 border-b border-cyan-900/40 pb-2">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
-                <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                <h3 className="text-cyan-400 text-xs font-bold tracking-widest ml-2 uppercase">AI MATRIX SCANNER</h3>
-              </div>
-              <button onClick={() => setIsScannerOpen(false)} className="text-neutral-500 hover:text-red-400 font-bold text-sm">✕</button>
+              <h3 className="text-cyan-400 text-xs font-bold uppercase">AI SCANNER</h3>
+              <button onClick={() => setIsScannerOpen(false)} className="text-neutral-500 font-bold text-sm">✕</button>
             </div>
 
             <div className="space-y-3 text-xs">
@@ -410,16 +425,16 @@ export default function App() {
                   type="number"
                   value={stake}
                   onChange={(e) => setStake(e.target.value)}
-                  className="w-full bg-[#13161f] border border-neutral-800 p-2.5 rounded-lg text-green-400 font-bold text-sm"
+                  className="w-full bg-[#13161f] border border-neutral-800 p-2.5 rounded-lg text-green-400 font-bold"
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-neutral-400 uppercase mb-1">BULK ORDERS QUEUED</label>
+                <label className="block text-[10px] text-neutral-400 uppercase mb-1">BULK ORDERS</label>
                 <input
                   type="number"
                   value={bulkTrades}
                   onChange={(e) => setBulkTrades(e.target.value)}
-                  className="w-full bg-[#13161f] border border-neutral-800 p-2.5 rounded-lg text-green-400 font-bold text-sm"
+                  className="w-full bg-[#13161f] border border-neutral-800 p-2.5 rounded-lg text-green-400 font-bold"
                 />
               </div>
 
@@ -429,7 +444,7 @@ export default function App() {
 
               <div>
                 <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                  <span>SCAN PROGRESS</span>
+                  <span>PROGRESS</span>
                   <span className="text-cyan-400 font-bold">{scanProgress}%</span>
                 </div>
                 <div className="w-full bg-neutral-900 h-1.5 rounded-full overflow-hidden">
@@ -449,7 +464,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Summary Modal */}
+      {/* Execution Summary Modal */}
       {showSummaryModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-[#12151c] border border-cyan-500/40 rounded-2xl p-6 max-w-xs w-full text-center space-y-3">
