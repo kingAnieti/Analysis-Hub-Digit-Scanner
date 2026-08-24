@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
+// App ID directly from your Deriv Developer Portal
 const APP_ID = "34cqHOYTzkye6dCyuLe1T";
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
@@ -38,7 +39,7 @@ export default function App() {
 
   const ws = useRef(null);
 
-  // Load saved tokens from LocalStorage on mount
+  // Load saved tokens on initial load
   useEffect(() => {
     const stored = localStorage.getItem("deriv_direct_tokens");
     if (stored) {
@@ -50,13 +51,14 @@ export default function App() {
     }
   }, []);
 
-  // Connect WebSocket & Authorize directly via API Token
+  // Connect & fetch active account details directly from WebSocket
   useEffect(() => {
-    if (!selectedAccount || !selectedAccount.token) return;
+    if (!selectedAccount?.token) return;
 
     ws.current = new WebSocket(WS_URL);
 
     ws.current.onopen = () => {
+      // Authorize session token
       ws.current.send(JSON.stringify({ authorize: selectedAccount.token }));
     };
 
@@ -65,19 +67,23 @@ export default function App() {
 
       if (data.msg_type === "authorize") {
         if (data.error) {
-          alert(`Connection Error: ${data.error.message}`);
+          alert(`Auth Failed: ${data.error.message}`);
           setSelectedAccount(null);
           return;
         }
 
-        const loginId = data.authorize.loginid;
-        setBalance(Number(data.authorize.balance).toFixed(2));
-        setCurrency(data.authorize.currency);
+        // Populate real/demo account details from Deriv WebSocket
+        const auth = data.authorize;
+        setBalance(Number(auth.balance).toFixed(2));
+        setCurrency(auth.currency || "USD");
 
-        // Update loginId in account list
-        setSelectedAccount((prev) => ({ ...prev, loginId }));
+        setSelectedAccount((prev) => ({
+          ...prev,
+          loginId: auth.loginid,
+          email: auth.email
+        }));
 
-        // Subscribe to balance & tick updates
+        // Subscribe to real-time balance changes & price ticks
         ws.current.send(JSON.stringify({ balance: 1, subscribe: 1 }));
         ws.current.send(JSON.stringify({ ticks: selectedMarket }));
       }
@@ -86,7 +92,7 @@ export default function App() {
         setBalance(Number(data.balance.balance).toFixed(2));
       }
 
-      if (data.msg_type === "tick" && data.tick && data.tick.quote) {
+      if (data.msg_type === "tick" && data.tick?.quote) {
         setLastTick(Number(data.tick.quote).toFixed(2));
       }
 
@@ -119,12 +125,14 @@ export default function App() {
       }
     };
 
-    return () => ws.current && ws.current.close();
+    return () => {
+      if (ws.current) ws.current.close();
+    };
   }, [selectedAccount?.token, selectedMarket]);
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
-  // Connect via API Token Directly (No Redirects)
+  // Connect via API Token Directly
   const handleDirectConnect = (e) => {
     e.preventDefault();
     if (!tokenInput.trim()) return;
@@ -146,7 +154,7 @@ export default function App() {
   const openDTrader = () => {
     const symbol = selectedMarket || "1HZ100V";
     let dTraderUrl = `https://dtrader.deriv.com/?chart_type=area&interval=1t&symbol=${symbol}`;
-    if (selectedAccount?.loginId) {
+    if (selectedAccount?.loginId && selectedAccount?.token) {
       dTraderUrl += `&account=${selectedAccount.loginId}&token1=${selectedAccount.token}`;
     }
     window.open(dTraderUrl, "_blank");
@@ -155,6 +163,7 @@ export default function App() {
   const handleDisconnect = () => {
     setSelectedAccount(null);
     setBalance("0.00");
+    setLastTick("0.00");
     if (ws.current) ws.current.close();
   };
 
@@ -225,7 +234,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0b0e] text-white font-sans flex flex-col justify-between selection:bg-cyan-500 selection:text-black">
-      {/* Top Header */}
+      {/* Top Header Navigation */}
       <header className="flex justify-between items-center px-4 py-3 bg-[#111318] border-b border-cyan-900/40">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-black text-sm">
@@ -274,12 +283,12 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <span className="text-xs text-amber-400 font-mono">Not Connected</span>
+            <span className="text-xs text-amber-400 font-mono">Disconnected</span>
           )}
         </div>
       </header>
 
-      {/* Direct Connection Box (Shown when not connected) */}
+      {/* Direct Token Input Bar (Rendered when disconnected) */}
       {!selectedAccount && (
         <div className="bg-[#12151c] border border-cyan-900/40 p-4 m-3 rounded-xl max-w-lg mx-auto w-full space-y-3">
           <div className="flex justify-between items-center">
@@ -299,7 +308,7 @@ export default function App() {
 
             <input
               type="text"
-              placeholder="Paste Deriv API Token (e.g. 34cqHOYTzk...)"
+              placeholder="Paste Deriv API Token (e.g., 34cqHOYTzk...)"
               value={tokenInput}
               onChange={(e) => setTokenInput(e.target.value)}
               className="flex-1 bg-[#181c26] border border-neutral-800 p-2 text-xs font-mono rounded-lg focus:outline-none focus:border-cyan-500"
@@ -315,7 +324,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Sub Header Navigation */}
+      {/* Strategy Tabs */}
       <nav className="flex bg-[#111318] border-b border-neutral-800 text-xs font-semibold">
         {["Quick strategy", "Bulk Trader", "Manual Trader", "Copy Trading"].map((tab) => (
           <button
@@ -383,11 +392,11 @@ export default function App() {
           AI SCANNER & BULK TRADER
         </button>
 
-        {/* Transactions Table */}
+        {/* Transactions Panel */}
         <div className="flex-1 bg-[#12151c] border border-neutral-800 rounded-xl p-3 flex flex-col justify-between min-h-[300px]">
           <div className="flex justify-between items-center border-b border-neutral-800 pb-2 mb-2">
             <span className="text-xs font-bold text-neutral-300">
-              Transactions ({selectedAccount ? selectedAccount.loginId : "Disconnected"})
+              Transactions ({selectedAccount ? (selectedAccount.loginId || selectedAccount.type) : "Disconnected"})
             </span>
             <button onClick={() => setTrades([])} className="bg-neutral-800 px-2 py-1 rounded text-neutral-400 text-[10px]">Reset</button>
           </div>
@@ -433,7 +442,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* AI Scanner Modal */}
+      {/* AI Scanner Dialog */}
       {isScannerOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 font-mono">
           <div className="bg-[#0b0d12] border border-cyan-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl">
@@ -481,7 +490,7 @@ export default function App() {
                 disabled={isScanning || !selectedAccount}
                 className="w-full bg-cyan-400 hover:bg-cyan-300 text-black font-black py-3 rounded-xl text-xs mt-2"
               >
-                {isScanning ? "SCANNING..." : selectedAccount ? `EXECUTE ON ${selectedAccount.loginId}` : "CONNECT TOKEN FIRST"}
+                {isScanning ? "SCANNING..." : selectedAccount ? `EXECUTE ON ${selectedAccount.loginId || selectedAccount.type}` : "CONNECT TOKEN FIRST"}
               </button>
             </div>
           </div>
