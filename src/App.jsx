@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
-const APP_ID = "YOUR_REAL_APP_ID_HERE"; // Replace with your App ID from developers.deriv.com
+const APP_ID = "YOUR_REAL_APP_ID_HERE"; 
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
 const SYNTHETIC_MARKETS = [
@@ -15,14 +15,17 @@ export default function App() {
   const [token, setToken] = useState(null);
   const [manualToken, setManualToken] = useState("");
   const [showTokenInput, setShowTokenInput] = useState(false);
-  const [accountType, setAccountType] = useState("demo"); // "demo" or "real"
   
-  // Market Selection Modes: "single" or "multi"
+  // Deriv Account States
+  const [accountList, setAccountList] = useState([]);
+  const [selectedAccount, setSelectedAccount] = useState(null);
+  const [balance, setBalance] = useState("0.00");
+  const [currency, setCurrency] = useState("USD");
+
+  // Market Selection
   const [marketMode, setMarketMode] = useState("single");
   const [selectedMarket, setSelectedMarket] = useState("R_100");
 
-  const [balance, setBalance] = useState("0.00");
-  const [currency, setCurrency] = useState("USD");
   const [activeTab, setActiveTab] = useState("bulk");
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [stake, setStake] = useState(1);
@@ -37,7 +40,7 @@ export default function App() {
   
   const ws = useRef(null);
 
-  // Handle OAuth Redirect Tokens
+  // Extract OAuth Redirect Tokens
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token1") || params.get("acct1");
@@ -52,14 +55,15 @@ export default function App() {
     }
   }, []);
 
-  // WebSocket Connection & Channel Management
+  // Connect & Authorize Account
   useEffect(() => {
-    if (!token) return;
+    const activeToken = selectedAccount ? selectedAccount.token : token;
+    if (!activeToken) return;
 
     ws.current = new WebSocket(WS_URL);
 
     ws.current.onopen = () => {
-      ws.current.send(JSON.stringify({ authorize: token }));
+      ws.current.send(JSON.stringify({ authorize: activeToken }));
     };
 
     ws.current.onmessage = (event) => {
@@ -70,16 +74,22 @@ export default function App() {
           alert("Authorization failed: " + data.error.message);
           localStorage.removeItem("deriv_token");
           setToken(null);
+          setSelectedAccount(null);
           return;
         }
+
         setBalance(Number(data.authorize.balance).toFixed(2));
         setCurrency(data.authorize.currency);
-        
-        // Auto-detect if account token is VRTC (Demo) or Real
-        if (data.authorize.loginid && data.authorize.loginid.startsWith("VRTC")) {
-          setAccountType("demo");
-        } else {
-          setAccountType("real");
+
+        // Store linked Deriv Options accounts (VRTC for Demo, CR for Real)
+        if (data.authorize.account_list) {
+          setAccountList(data.authorize.account_list);
+          if (!selectedAccount) {
+            const currentAcc = data.authorize.account_list.find(
+              (acc) => acc.loginid === data.authorize.loginid
+            );
+            if (currentAcc) setSelectedAccount(currentAcc);
+          }
         }
 
         ws.current.send(JSON.stringify({ balance: 1, subscribe: 1 }));
@@ -90,15 +100,13 @@ export default function App() {
         setBalance(Number(data.balance.balance).toFixed(2));
       }
 
-      if (data.msg_type === "tick") {
-        if (data.tick && data.tick.quote) {
-          setLastTick(Number(data.tick.quote).toFixed(2));
-        }
+      if (data.msg_type === "tick" && data.tick && data.tick.quote) {
+        setLastTick(Number(data.tick.quote).toFixed(2));
       }
 
       if (data.msg_type === "buy") {
         if (data.error) {
-          addLog(`[ERROR] Trade failed: ${data.error.message}`);
+          addLog(`[ERROR] ${data.error.message}`);
           return;
         }
         const contract = data.buy;
@@ -126,7 +134,7 @@ export default function App() {
     };
 
     return () => ws.current && ws.current.close();
-  }, [token, selectedMarket]);
+  }, [token, selectedAccount, selectedMarket]);
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
@@ -142,12 +150,20 @@ export default function App() {
     if (!manualToken.trim()) return;
     localStorage.setItem("deriv_token", manualToken.trim());
     setToken(manualToken.trim());
+    setSelectedAccount(null);
     setShowTokenInput(false);
+  };
+
+  const handleAccountSwitch = (acc) => {
+    if (ws.current) ws.current.close();
+    setSelectedAccount(acc);
   };
 
   const handleDisconnect = () => {
     localStorage.removeItem("deriv_token");
     setToken(null);
+    setSelectedAccount(null);
+    setAccountList([]);
     if (ws.current) ws.current.close();
   };
 
@@ -156,22 +172,23 @@ export default function App() {
     setScanProgress(0);
     setTerminalLogs([]);
 
-    addLog(`[INFO] Operating Mode: ${accountType.toUpperCase()} Account`);
-    addLog(`[INFO] Target: ${marketMode === "single" ? `Single (${selectedMarket})` : "Multi-Synthetic Array"}`);
+    const accountLabel = selectedAccount?.loginid?.startsWith("VRTC") ? "DEMO OPTIONS" : "REAL OPTIONS";
+    addLog(`[INFO] Connected Account: ${accountLabel}`);
+    addLog(`[INFO] Mode: ${marketMode === "single" ? selectedMarket : "Multi-Synthetic Array"}`);
     
     let progress = 0;
     const interval = setInterval(() => {
       progress += 20;
       setScanProgress(progress);
       
-      if (progress === 40) addLog("[INFO] Reading volatility index stream...");
+      if (progress === 40) addLog("[INFO] Reading volatility stream...");
       if (progress === 60) addLog("[WARNING] Signal pressure detected");
-      if (progress === 80) addLog("[INFO] Calibrating Over 4 / Under 6 sequence...");
+      if (progress === 80) addLog("[INFO] Calibrating Digit Under 6 sequence...");
 
       if (progress >= 100) {
         clearInterval(interval);
         addLog("[OK] Strategy Armed");
-        addLog(`[INFO] Sending ${bulkTrades} bulk trades...`);
+        addLog(`[INFO] Sending ${bulkTrades} bulk option trades...`);
         
         setTimeout(() => {
           setIsScanning(false);
@@ -187,7 +204,6 @@ export default function App() {
     setTrades([]);
 
     for (let i = 0; i < bulkTrades; i++) {
-      // Pick dynamic target symbol if multi-synthetic mode is active
       const targetSymbol = marketMode === "multi" 
         ? SYNTHETIC_MARKETS[i % SYNTHETIC_MARKETS.length].symbol 
         : selectedMarket;
@@ -219,7 +235,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0b0e] text-white font-sans flex flex-col justify-between selection:bg-cyan-500 selection:text-black">
-      {/* Top Main Navigation Header */}
+      {/* Top Header */}
       <header className="flex justify-between items-center px-4 py-3 bg-[#111318] border-b border-cyan-900/40 shadow-lg shadow-cyan-950/20">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-black text-sm tracking-tighter shadow-md shadow-cyan-500/20">
@@ -227,31 +243,32 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-xs font-black tracking-widest text-cyan-400 uppercase">Deriv Analysis Hub</h1>
-            <p className="text-[10px] text-neutral-500 font-mono">v2.4 • AI MATRIX</p>
+            <p className="text-[10px] text-neutral-500 font-mono">v2.4 • OPTIONS MATRIX</p>
           </div>
         </div>
 
-        {/* Demo / Real Account Switcher & Balance Container */}
-        {token ? (
+        {/* Options Account Switcher Dropdown & Balance Display */}
+        {token || selectedAccount ? (
           <div className="flex items-center gap-2">
-            {/* Account Type Badge */}
-            <div className="flex bg-[#181c26] p-1 rounded-lg border border-neutral-800 text-[10px] font-bold font-mono">
-              <button
-                onClick={() => setAccountType("demo")}
-                className={`px-2 py-0.5 rounded transition ${accountType === "demo" ? "bg-amber-500 text-black" : "text-neutral-400 hover:text-white"}`}
+            {accountList.length > 0 && (
+              <select
+                value={selectedAccount?.loginid || ""}
+                onChange={(e) => {
+                  const acc = accountList.find((a) => a.loginid === e.target.value);
+                  if (acc) handleAccountSwitch(acc);
+                }}
+                className="bg-[#181c26] border border-neutral-800 text-[10px] font-mono font-bold text-cyan-400 rounded-lg p-1.5 focus:outline-none"
               >
-                DEMO
-              </button>
-              <button
-                onClick={() => setAccountType("real")}
-                className={`px-2 py-0.5 rounded transition ${accountType === "real" ? "bg-green-500 text-black" : "text-neutral-400 hover:text-white"}`}
-              >
-                REAL
-              </button>
-            </div>
+                {accountList.map((acc) => (
+                  <option key={acc.loginid} value={acc.loginid}>
+                    {acc.loginid.startsWith("VRTC") ? `DEMO (${acc.loginid})` : `REAL (${acc.loginid})`}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <div className="flex items-center gap-2 bg-[#161922] px-3 py-1.5 rounded-full border border-neutral-800">
-              <span className={`w-2 h-2 rounded-full ${accountType === "demo" ? "bg-amber-400" : "bg-green-500"} animate-pulse`}></span>
+              <span className={`w-2 h-2 rounded-full ${selectedAccount?.loginid?.startsWith("VRTC") ? "bg-amber-400" : "bg-green-500"} animate-pulse`}></span>
               <span className="text-xs font-mono font-bold text-white">
                 ${balance} <span className="text-neutral-500">{currency}</span>
               </span>
@@ -289,10 +306,9 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
-        {/* Market Selection Control Box */}
         <div className="bg-[#12151c] border border-neutral-800 rounded-xl p-3 space-y-2">
           <div className="flex justify-between items-center text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
-            <span>Market Configuration</span>
+            <span>Synthetic Options Symbol</span>
             <div className="flex bg-[#181c26] p-0.5 rounded border border-neutral-800 font-mono">
               <button
                 onClick={() => setMarketMode("single")}
@@ -333,7 +349,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* AI Trigger Scanner Drawer */}
         <button
           onClick={() => setIsScannerOpen(true)}
           className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-black py-3.5 rounded-xl text-sm tracking-wider shadow-lg shadow-cyan-500/20 active:scale-[0.99] transition flex items-center justify-center gap-2"
@@ -342,7 +357,7 @@ export default function App() {
           AI SCANNER & BULK TRADER
         </button>
 
-        {/* Order History Display Table */}
+        {/* Transactions Display */}
         <div className="flex-1 bg-[#12151c] border border-neutral-800 rounded-xl p-3 flex flex-col justify-between min-h-[300px]">
           <div className="flex justify-between items-center border-b border-neutral-800 pb-2 mb-2">
             <span className="text-xs font-bold text-neutral-300">Transactions</span>
@@ -353,7 +368,7 @@ export default function App() {
             {trades.length === 0 ? (
               <div className="h-40 flex flex-col items-center justify-center text-neutral-600 text-xs">
                 <p>No active session trades</p>
-                <p className="text-[10px] text-neutral-700">Run scanner to trigger bulk orders</p>
+                <p className="text-[10px] text-neutral-700">Run scanner to trigger bulk options</p>
               </div>
             ) : (
               trades.map((t, idx) => (
@@ -368,7 +383,7 @@ export default function App() {
             )}
           </div>
 
-          {/* Session Metrics Bar */}
+          {/* Metrics Footer */}
           <div className="grid grid-cols-4 gap-1 pt-3 border-t border-neutral-800 mt-2 text-center text-[10px] font-mono">
             <div className="bg-[#181c26] p-2 rounded-lg">
               <p className="text-neutral-500">Total Stake</p>
@@ -392,17 +407,17 @@ export default function App() {
         </div>
       </main>
 
-      {/* Manual Token Overlay Modal */}
+      {/* Manual Token Overlay */}
       {showTokenInput && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-[#12151c] border border-cyan-500/50 rounded-2xl max-w-xs w-full p-5 space-y-3 font-mono">
             <h3 className="text-xs font-bold text-cyan-400">ENTER DERIV API TOKEN</h3>
             <p className="text-[10px] text-neutral-400">
-              Create an API token in Deriv Account Settings with <b>Read</b> and <b>Trade</b> scope:
+              Paste an API token from Deriv Options Settings with <b>Read</b> and <b>Trade</b> scope:
             </p>
             <input
               type="text"
-              placeholder="Paste API token..."
+              placeholder="Paste token here..."
               value={manualToken}
               onChange={(e) => setManualToken(e.target.value)}
               className="w-full bg-[#181c26] border border-neutral-800 p-2.5 rounded-lg text-xs text-green-400 focus:outline-none focus:border-cyan-400"
@@ -418,7 +433,7 @@ export default function App() {
       {/* Matrix Scanner Drawer */}
       {isScannerOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-[#0b0d12] border border-cyan-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl shadow-cyan-950/50 relative font-mono">
+          <div className="bg-[#0b0d12] border border-cyan-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl font-mono">
             <div className="flex justify-between items-center mb-4 border-b border-cyan-900/40 pb-2">
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-red-500"></span>
@@ -449,7 +464,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Real-time Terminal Log Window */}
               <div className="bg-black/90 border border-neutral-800 p-3 rounded-xl h-24 overflow-y-auto text-[10px] text-green-400 space-y-1">
                 {terminalLogs.length === 0 ? <p className="text-neutral-600">Waiting for matrix initiation...</p> : terminalLogs.map((l, i) => <p key={i}>{l}</p>)}
               </div>
@@ -466,10 +480,10 @@ export default function App() {
 
               <button
                 onClick={startDigitScanner}
-                disabled={isScanning || !token}
+                disabled={isScanning || (!token && !selectedAccount)}
                 className="w-full bg-cyan-400 hover:bg-cyan-300 text-black font-black py-3 rounded-xl text-xs mt-2"
               >
-                {isScanning ? "SCANNING..." : token ? `SCAN & EXECUTE (${accountType.toUpperCase()})` : "AUTHENTICATE FIRST"}
+                {isScanning ? "SCANNING..." : token || selectedAccount ? "EXECUTE BULK OPTIONS" : "AUTHENTICATE FIRST"}
               </button>
             </div>
           </div>
