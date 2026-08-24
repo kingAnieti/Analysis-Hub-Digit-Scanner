@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
 
-// App ID directly from your Deriv Developer Portal
 const APP_ID = "34cqHOYTzkye6dCyuLe1T";
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
@@ -14,7 +13,10 @@ const SYNTHETIC_MARKETS = [
 ];
 
 export default function App() {
-  const [accounts, setAccounts] = useState([]);
+  const [tokenInput, setTokenInput] = useState("");
+  const [accountTypeInput, setAccountTypeInput] = useState("DEMO");
+  const [savedTokens, setSavedTokens] = useState([]);
+  
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [balance, setBalance] = useState("0.00");
   const [currency, setCurrency] = useState("USD");
@@ -36,44 +38,21 @@ export default function App() {
 
   const ws = useRef(null);
 
-  // Extract Accounts & Session Tokens from Deriv OAuth Redirect
+  // Load saved tokens from LocalStorage on mount
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const parsedAccounts = [];
-
-    for (let i = 1; i <= 5; i++) {
-      const loginId = params.get(`acct${i}`);
-      const token = params.get(`token${i}`);
-
-      if (loginId && token) {
-        parsedAccounts.push({
-          loginId,
-          token,
-          type: loginId.startsWith("VR") ? "DEMO" : "REAL"
-        });
-      }
-    }
-
-    if (parsedAccounts.length > 0) {
-      localStorage.setItem("deriv_oauth_accounts", JSON.stringify(parsedAccounts));
-      setAccounts(parsedAccounts);
-      // Default to DEMO account if available
-      const demoAcc = parsedAccounts.find(a => a.type === "DEMO") || parsedAccounts[0];
-      setSelectedAccount(demoAcc);
-      window.history.replaceState({}, document.title, window.location.pathname);
-    } else {
-      const stored = localStorage.getItem("deriv_oauth_accounts");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setAccounts(parsed);
+    const stored = localStorage.getItem("deriv_direct_tokens");
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      setSavedTokens(parsed);
+      if (parsed.length > 0) {
         setSelectedAccount(parsed[0]);
       }
     }
   }, []);
 
-  // Connect WebSocket when account or market changes
+  // Connect WebSocket & Authorize directly via API Token
   useEffect(() => {
-    if (!selectedAccount) return;
+    if (!selectedAccount || !selectedAccount.token) return;
 
     ws.current = new WebSocket(WS_URL);
 
@@ -86,13 +65,19 @@ export default function App() {
 
       if (data.msg_type === "authorize") {
         if (data.error) {
-          alert(`Auth Error: ${data.error.message}`);
+          alert(`Connection Error: ${data.error.message}`);
+          setSelectedAccount(null);
           return;
         }
 
+        const loginId = data.authorize.loginid;
         setBalance(Number(data.authorize.balance).toFixed(2));
         setCurrency(data.authorize.currency);
 
+        // Update loginId in account list
+        setSelectedAccount((prev) => ({ ...prev, loginId }));
+
+        // Subscribe to balance & tick updates
         ws.current.send(JSON.stringify({ balance: 1, subscribe: 1 }));
         ws.current.send(JSON.stringify({ ticks: selectedMarket }));
       }
@@ -135,31 +120,39 @@ export default function App() {
     };
 
     return () => ws.current && ws.current.close();
-  }, [selectedAccount, selectedMarket]);
+  }, [selectedAccount?.token, selectedMarket]);
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
-  // Triggers OAuth Login on Deriv
-  const handleOAuthLogin = () => {
-    const redirectUrl = encodeURIComponent("https://analysis-hub-digit-scanner.vercel.app");
-    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=EN&redirect_uri=${redirectUrl}`;
+  // Connect via API Token Directly (No Redirects)
+  const handleDirectConnect = (e) => {
+    e.preventDefault();
+    if (!tokenInput.trim()) return;
+
+    const newAcc = {
+      token: tokenInput.trim(),
+      type: accountTypeInput,
+      loginId: accountTypeInput === "DEMO" ? "DEMO Account" : "REAL Account"
+    };
+
+    const updatedTokens = [newAcc, ...savedTokens.filter((t) => t.token !== newAcc.token)];
+    setSavedTokens(updatedTokens);
+    localStorage.setItem("deriv_direct_tokens", JSON.stringify(updatedTokens));
+    
+    setSelectedAccount(newAcc);
+    setTokenInput("");
   };
 
-  // Directly launches DTrader configured with Volatility 100 (1s) Index (1HZ100V)
   const openDTrader = () => {
     const symbol = selectedMarket || "1HZ100V";
     let dTraderUrl = `https://dtrader.deriv.com/?chart_type=area&interval=1t&symbol=${symbol}`;
-    
-    if (selectedAccount) {
+    if (selectedAccount?.loginId) {
       dTraderUrl += `&account=${selectedAccount.loginId}&token1=${selectedAccount.token}`;
     }
-    
     window.open(dTraderUrl, "_blank");
   };
 
   const handleDisconnect = () => {
-    localStorage.removeItem("deriv_oauth_accounts");
-    setAccounts([]);
     setSelectedAccount(null);
     setBalance("0.00");
     if (ws.current) ws.current.close();
@@ -170,7 +163,7 @@ export default function App() {
     setScanProgress(0);
     setTerminalLogs([]);
 
-    addLog(`[INFO] Active Account: ${selectedAccount?.loginId} (${selectedAccount?.type})`);
+    addLog(`[INFO] Connected Account: ${selectedAccount?.loginId || selectedAccount?.type}`);
     addLog(`[INFO] Market: ${marketMode === "single" ? selectedMarket : "Multi-Array"}`);
 
     let progress = 0;
@@ -232,7 +225,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0b0e] text-white font-sans flex flex-col justify-between selection:bg-cyan-500 selection:text-black">
-      {/* Top Navigation Header */}
+      {/* Top Header */}
       <header className="flex justify-between items-center px-4 py-3 bg-[#111318] border-b border-cyan-900/40">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-black text-sm">
@@ -240,12 +233,11 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-xs font-black tracking-widest text-cyan-400 uppercase">Deriv Analysis Hub</h1>
-            <p className="text-[10px] text-neutral-500 font-mono">v3.2 • DTRADER READY</p>
+            <p className="text-[10px] text-neutral-500 font-mono">v3.3 • DIRECT TOKEN LOGIN</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Direct Open DTrader Button */}
           <button
             onClick={openDTrader}
             className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-3 py-1.5 rounded text-[11px] font-bold font-mono transition flex items-center gap-1"
@@ -254,23 +246,24 @@ export default function App() {
             <span className="text-[10px]">↗</span>
           </button>
 
-          {/* Account Selector or Login Button */}
           {selectedAccount ? (
             <div className="flex items-center gap-2">
-              <select
-                value={selectedAccount.loginId}
-                onChange={(e) => {
-                  const acc = accounts.find((a) => a.loginId === e.target.value);
-                  if (acc) setSelectedAccount(acc);
-                }}
-                className="bg-[#181c26] border border-neutral-800 text-[10px] font-mono font-bold text-cyan-400 rounded-lg p-1.5 focus:outline-none"
-              >
-                {accounts.map((acc) => (
-                  <option key={acc.loginId} value={acc.loginId}>
-                    {acc.type}: {acc.loginId}
-                  </option>
-                ))}
-              </select>
+              {savedTokens.length > 1 && (
+                <select
+                  value={selectedAccount.token}
+                  onChange={(e) => {
+                    const acc = savedTokens.find((t) => t.token === e.target.value);
+                    if (acc) setSelectedAccount(acc);
+                  }}
+                  className="bg-[#181c26] border border-neutral-800 text-[10px] font-mono font-bold text-cyan-400 rounded-lg p-1.5 focus:outline-none"
+                >
+                  {savedTokens.map((acc, idx) => (
+                    <option key={idx} value={acc.token}>
+                      {acc.type}: {acc.loginId || "Account"}
+                    </option>
+                  ))}
+                </select>
+              )}
 
               <div className="flex items-center gap-2 bg-[#161922] px-3 py-1.5 rounded-full border border-neutral-800">
                 <span className={`w-2 h-2 rounded-full ${selectedAccount.type === "DEMO" ? "bg-amber-400" : "bg-green-500"} animate-pulse`}></span>
@@ -281,17 +274,48 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <button
-              onClick={handleOAuthLogin}
-              className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 px-4 py-1.5 rounded text-xs font-bold transition shadow-lg shadow-red-950/50"
-            >
-              CONNECT DERIV
-            </button>
+            <span className="text-xs text-amber-400 font-mono">Not Connected</span>
           )}
         </div>
       </header>
 
-      {/* Sub Header Tabs */}
+      {/* Direct Connection Box (Shown when not connected) */}
+      {!selectedAccount && (
+        <div className="bg-[#12151c] border border-cyan-900/40 p-4 m-3 rounded-xl max-w-lg mx-auto w-full space-y-3">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">Direct API Token Connection</h2>
+            <span className="text-[10px] text-neutral-400">No redirect required</span>
+          </div>
+
+          <form onSubmit={handleDirectConnect} className="flex gap-2">
+            <select
+              value={accountTypeInput}
+              onChange={(e) => setAccountTypeInput(e.target.value)}
+              className="bg-[#181c26] border border-neutral-800 text-xs text-cyan-400 font-bold rounded-lg px-2"
+            >
+              <option value="DEMO">DEMO</option>
+              <option value="REAL">REAL</option>
+            </select>
+
+            <input
+              type="text"
+              placeholder="Paste Deriv API Token (e.g. 34cqHOYTzk...)"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              className="flex-1 bg-[#181c26] border border-neutral-800 p-2 text-xs font-mono rounded-lg focus:outline-none focus:border-cyan-500"
+            />
+
+            <button
+              type="submit"
+              className="bg-cyan-500 hover:bg-cyan-400 text-black font-black px-4 py-2 rounded-lg text-xs transition"
+            >
+              CONNECT
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Sub Header Navigation */}
       <nav className="flex bg-[#111318] border-b border-neutral-800 text-xs font-semibold">
         {["Quick strategy", "Bulk Trader", "Manual Trader", "Copy Trading"].map((tab) => (
           <button
@@ -308,7 +332,7 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Main Content Workspace */}
+      {/* Main Workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
         <div className="bg-[#12151c] border border-neutral-800 rounded-xl p-3 space-y-2">
           <div className="flex justify-between items-center text-[10px] font-bold text-neutral-400 uppercase">
@@ -457,7 +481,7 @@ export default function App() {
                 disabled={isScanning || !selectedAccount}
                 className="w-full bg-cyan-400 hover:bg-cyan-300 text-black font-black py-3 rounded-xl text-xs mt-2"
               >
-                {isScanning ? "SCANNING..." : selectedAccount ? `EXECUTE ON ${selectedAccount.loginId}` : "CONNECT DERIV FIRST"}
+                {isScanning ? "SCANNING..." : selectedAccount ? `EXECUTE ON ${selectedAccount.loginId}` : "CONNECT TOKEN FIRST"}
               </button>
             </div>
           </div>
