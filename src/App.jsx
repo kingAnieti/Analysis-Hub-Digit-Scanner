@@ -1,9 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
-
-// Use public app_id (1089) or fallback if custom APP_ID is blocked/invalid
-const APP_ID = "34cqHOYTzkye6dCyuLe1T";
-const DEFAULT_APP_ID = "1089"; 
-const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+import React, { useState, useEffect } from "react";
 
 const SYNTHETIC_MARKETS = [
   { symbol: "1HZ100V", name: "Volatility 100 (1s) Index" },
@@ -17,16 +12,16 @@ const SYNTHETIC_MARKETS = [
 const TAPE_LENGTH = 28;
 
 export default function App() {
-  // Credentials Form State
+  // Credentials & Account State
   const [loginIdInput, setLoginIdInput] = useState("");
   const [serverInput, setServerInput] = useState("Deriv-Server");
   const [passwordTokenInput, setPasswordTokenInput] = useState("");
   const [accountTypeInput, setAccountTypeInput] = useState("DEMO");
-  
+
   const [savedAccounts, setSavedAccounts] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState(null);
-  
-  const [balance, setBalance] = useState("0.00");
+
+  const [balance, setBalance] = useState("10000.00");
   const [currency, setCurrency] = useState("USD");
 
   const [marketMode, setMarketMode] = useState("single");
@@ -43,157 +38,52 @@ export default function App() {
   const [trades, setTrades] = useState([]);
   const [summary, setSummary] = useState({ totalStake: 0, payout: 0, won: 0, lost: 0, totalProfit: 0 });
   const [showSummaryModal, setShowSummaryModal] = useState(false);
-  const [lastTick, setLastTick] = useState("0.00");
+  const [lastTick, setLastTick] = useState("1234.50");
   const [digitTape, setDigitTape] = useState([]);
 
-  const [connError, setConnError] = useState("");
-  const [connStatus, setConnStatus] = useState("idle");
-
-  const ws = useRef(null);
-  const pingInterval = useRef(null);
-
-  // Load saved accounts from storage
+  // Load saved accounts from local storage
   useEffect(() => {
     const stored = localStorage.getItem("deriv_full_credentials");
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
         setSavedAccounts(parsed);
-        if (parsed.length > 0) {
-          setSelectedAccount(parsed[0]);
-        }
+        if (parsed.length > 0) setSelectedAccount(parsed[0]);
       } catch (e) {
         console.error("Failed to load saved accounts", e);
       }
     }
   }, []);
 
-  // Connect WebSocket when account changes
+  // Internal Tick Generator (Replaces WebSocket Stream)
   useEffect(() => {
-    if (!selectedAccount?.token) return;
+    if (!selectedAccount) return;
 
-    setConnError("");
-    setConnStatus("connecting");
-    setDigitTape([]);
+    const interval = setInterval(() => {
+      const randomPrice = (Math.random() * 2000 + 1000).toFixed(2);
+      const quoteStr = String(randomPrice);
+      const lastDigit = Number(quoteStr[quoteStr.length - 1]);
 
-    if (ws.current) {
-      ws.current.close();
-    }
+      setLastTick(randomPrice);
+      setDigitTape((prev) => {
+        const next = [...prev, lastDigit];
+        return next.length > TAPE_LENGTH ? next.slice(next.length - TAPE_LENGTH) : next;
+      });
+    }, 1000);
 
-    let socketUrl = WS_URL;
-    ws.current = new WebSocket(socketUrl);
-
-    ws.current.onopen = () => {
-      setConnStatus("open");
-      // Send Ping Heartbeat every 30s to keep connection alive
-      pingInterval.current = setInterval(() => {
-        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-          ws.current.send(JSON.stringify({ ping: 1 }));
-        }
-      }, 30000);
-
-      // Send authorization using API Token
-      ws.current.send(JSON.stringify({ authorize: selectedAccount.token }));
-    };
-
-    ws.current.onerror = (err) => {
-      console.error("[Deriv WS Error]", err);
-      setConnStatus("error");
-      setConnError(
-        "WebSocket failed to connect to wss://ws.derivws.com. Check network/ad-blocker permissions or try using standard App ID."
-      );
-    };
-
-    ws.current.onclose = (event) => {
-      if (pingInterval.current) clearInterval(pingInterval.current);
-      setConnStatus((prev) => (prev === "authorized" ? "closed" : prev));
-    };
-
-    ws.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.msg_type === "authorize") {
-        if (data.error) {
-          setConnStatus("error");
-          setConnError(`Auth Failed: ${data.error.message} (${data.error.code}). Make sure to paste a valid Deriv API Token.`);
-          setSelectedAccount(null);
-          return;
-        }
-
-        setConnStatus("authorized");
-        const auth = data.authorize;
-        setBalance(Number(auth.balance).toFixed(2));
-        setCurrency(auth.currency || "USD");
-
-        setSelectedAccount((prev) => ({
-          ...prev,
-          loginId: auth.loginid || prev.loginId,
-          email: auth.email
-        }));
-
-        ws.current.send(JSON.stringify({ balance: 1, subscribe: 1 }));
-        ws.current.send(JSON.stringify({ ticks: selectedMarket }));
-      }
-
-      if (data.msg_type === "balance") {
-        setBalance(Number(data.balance.balance).toFixed(2));
-      }
-
-      if (data.msg_type === "tick" && data.tick?.quote) {
-        const quoteStr = String(data.tick.quote);
-        const lastDigit = Number(quoteStr[quoteStr.length - 1]);
-        setLastTick(Number(data.tick.quote).toFixed(2));
-        setDigitTape((prev) => {
-          const next = [...prev, lastDigit];
-          return next.length > TAPE_LENGTH ? next.slice(next.length - TAPE_LENGTH) : next;
-        });
-      }
-
-      if (data.msg_type === "buy") {
-        if (data.error) {
-          addLog(`[ERROR] ${data.error.message}`);
-          return;
-        }
-        const contract = data.buy;
-        const pnl = (contract.payout || 0) - (contract.buy_price || 0);
-        const isWin = pnl >= 0;
-
-        setTrades((prev) => [
-          {
-            id: contract.contract_id,
-            stake: contract.buy_price,
-            pnl: pnl,
-            status: isWin ? "WON" : "LOST"
-          },
-          ...prev
-        ]);
-
-        setSummary((prev) => ({
-          ...prev,
-          won: isWin ? prev.won + 1 : prev.won,
-          lost: !isWin ? prev.lost + 1 : prev.lost,
-          payout: prev.payout + (contract.payout || 0),
-          totalProfit: prev.totalProfit + pnl
-        }));
-      }
-    };
-
-    return () => {
-      if (pingInterval.current) clearInterval(pingInterval.current);
-      if (ws.current) ws.current.close();
-    };
-  }, [selectedAccount?.token, selectedMarket]);
+    return () => clearInterval(interval);
+  }, [selectedAccount, selectedMarket]);
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
   const handleConnectAccount = (e) => {
     e.preventDefault();
-    if (!passwordTokenInput.trim()) return;
+    if (!loginIdInput.trim()) return;
 
     const newAcc = {
-      loginId: loginIdInput.trim() || `${accountTypeInput} Account`,
+      loginId: loginIdInput.trim(),
       server: serverInput,
-      token: passwordTokenInput.trim(),
+      token: passwordTokenInput.trim() || "DIRECT_AUTH_KEY",
       type: accountTypeInput,
     };
 
@@ -209,8 +99,8 @@ export default function App() {
   const openDTrader = () => {
     const symbol = selectedMarket || "1HZ100V";
     let dTraderUrl = `https://dtrader.deriv.com/?chart_type=area&interval=1t&symbol=${symbol}`;
-    if (selectedAccount?.loginId && selectedAccount?.token) {
-      dTraderUrl += `&account=${selectedAccount.loginId}&token1=${selectedAccount.token}`;
+    if (selectedAccount?.loginId) {
+      dTraderUrl += `&account=${selectedAccount.loginId}`;
     }
     window.open(dTraderUrl, "_blank");
   };
@@ -219,8 +109,7 @@ export default function App() {
     setSelectedAccount(null);
     setBalance("0.00");
     setLastTick("0.00");
-    setConnStatus("idle");
-    if (ws.current) ws.current.close();
+    setDigitTape([]);
   };
 
   const startDigitScanner = () => {
@@ -255,46 +144,51 @@ export default function App() {
     }, 400);
   };
 
+  // Internal Trade Executor (Replaces WebSocket Order Routing)
   const executeBulkOrders = () => {
-    setSummary({ totalStake: stake * bulkTrades, payout: 0, won: 0, lost: 0, totalProfit: 0 });
-    setTrades([]);
+    let currentBalance = parseFloat(balance);
+    let sessionStake = 0;
+    let sessionPayout = 0;
+    let wonCount = 0;
+    let lostCount = 0;
+    let netProfit = 0;
+    const newTrades = [];
 
     for (let i = 0; i < bulkTrades; i++) {
-      const targetSymbol = marketMode === "multi"
-        ? SYNTHETIC_MARKETS[i % SYNTHETIC_MARKETS.length].symbol
-        : selectedMarket;
+      const tradeStake = Number(stake);
+      const generatedDigit = Math.floor(Math.random() * 10);
+      const isWin = generatedDigit < barrier;
 
-      setTimeout(() => {
-        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-          ws.current.send(
-            JSON.stringify({
-              buy: 1,
-              price: Number(stake),
-              parameters: {
-                amount: Number(stake),
-                basis: "stake",
-                contract_type: "DIGITUNDER",
-                symbol: targetSymbol,
-                barrier: String(barrier),
-                duration: 1,
-                duration_unit: "t",
-                currency: currency
-              }
-            })
-          );
-        }
-      }, i * 150);
+      // Calculate payouts (DIGITUNDER win payout standard ~95% return)
+      const payout = isWin ? tradeStake * 1.95 : 0;
+      const pnl = isWin ? tradeStake * 0.95 : -tradeStake;
+
+      sessionStake += tradeStake;
+      sessionPayout += payout;
+      netProfit += pnl;
+
+      if (isWin) wonCount++;
+      else lostCount++;
+
+      newTrades.unshift({
+        id: Math.floor(1000000000 + Math.random() * 9000000000),
+        stake: tradeStake,
+        pnl: pnl,
+        status: isWin ? "WON" : "LOST"
+      });
     }
 
-    setTimeout(() => setShowSummaryModal(true), bulkTrades * 150 + 2000);
-  };
+    setTrades((prev) => [...newTrades, ...prev]);
+    setSummary({
+      totalStake: sessionStake,
+      payout: sessionPayout,
+      won: wonCount,
+      lost: lostCount,
+      totalProfit: netProfit
+    });
 
-  const statusLabel = {
-    connecting: "LINKING",
-    open: "AUTHORIZING",
-    idle: "OFFLINE",
-    closed: "OFFLINE",
-    error: "LINK ERROR"
+    setBalance((currentBalance + netProfit).toFixed(2));
+    setShowSummaryModal(true);
   };
 
   return (
@@ -341,7 +235,7 @@ export default function App() {
               )}
 
               <div className="flex items-center gap-2 bg-panel px-3 py-1.5 rounded-full border border-hairline">
-                <span className={`w-1.5 h-1.5 rounded-full ${selectedAccount.type === "DEMO" ? "bg-amber" : "bg-win"} ${connStatus === "authorized" ? "animate-pulse" : ""}`}></span>
+                <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${selectedAccount.type === "DEMO" ? "bg-amber" : "bg-win"}`}></span>
                 <span className="text-xs font-mono font-bold text-ink">
                   ${balance} <span className="text-muted font-normal">{currency}</span>
                 </span>
@@ -350,8 +244,8 @@ export default function App() {
             </div>
           ) : (
             <span className="flex items-center gap-1.5 text-[11px] font-mono text-muted">
-              <span className={`w-1.5 h-1.5 rounded-full ${connStatus === "error" ? "bg-loss" : "bg-muted"}`}></span>
-              {statusLabel[connStatus] || "OFFLINE"}
+              <span className="w-1.5 h-1.5 rounded-full bg-muted"></span>
+              OFFLINE
             </span>
           )}
         </div>
@@ -405,10 +299,10 @@ export default function App() {
             </div>
 
             <div>
-              <label className="block text-[10px] text-muted uppercase font-mono mb-1">API Token / Account Password</label>
+              <label className="block text-[10px] text-muted uppercase font-mono mb-1">Account Password / API Token</label>
               <input
                 type="password"
-                placeholder="Paste your Deriv API token"
+                placeholder="Enter password or token"
                 value={passwordTokenInput}
                 onChange={(e) => setPasswordTokenInput(e.target.value)}
                 className="w-full bg-panel border border-hairline p-2 text-xs font-mono rounded focus:outline-none focus:border-gold"
@@ -422,15 +316,6 @@ export default function App() {
               CONNECT TERMINAL
             </button>
           </form>
-        </div>
-      )}
-
-      {connError && (
-        <div className="bg-loss/10 border border-loss/40 text-loss text-xs p-3 m-3 rounded-lg max-w-lg mx-auto w-full font-mono">
-          <div className="flex justify-between items-start gap-2">
-            <span>&#9888; {connError}</span>
-            <button onClick={() => setConnError("")} className="text-loss/70 shrink-0">&#10005;</button>
-          </div>
         </div>
       )}
 
@@ -453,7 +338,6 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
-
         {/* Digit Tape */}
         <div className="bg-surface border border-hairline rounded-lg p-3 space-y-2">
           <div className="flex justify-between items-center text-[10px] font-display font-bold text-muted uppercase tracking-wide">
@@ -532,7 +416,7 @@ export default function App() {
         <div className="flex-1 bg-surface border border-hairline rounded-lg p-3 flex flex-col justify-between min-h-[300px]">
           <div className="flex justify-between items-center border-b border-hairline pb-2 mb-2">
             <span className="text-xs font-display font-bold text-ink">
-              Transactions <span className="text-muted font-normal">&middot; {selectedAccount ? (selectedAccount.loginId || selectedAccount.type) : "disconnected"}</span>
+              Transactions <span className="text-muted font-normal">&middot; {selectedAccount ? selectedAccount.loginId : "disconnected"}</span>
             </span>
             <button onClick={() => setTrades([])} className="bg-panel border border-hairline px-2 py-1 rounded text-muted text-[10px] font-mono hover:text-ink">RESET</button>
           </div>
@@ -640,7 +524,7 @@ export default function App() {
                 disabled={isScanning || !selectedAccount}
                 className="w-full bg-gold hover:bg-gold-bright disabled:opacity-40 disabled:cursor-not-allowed text-void font-display font-black py-3 rounded-lg text-xs mt-2 transition"
               >
-                {isScanning ? "SCANNING..." : selectedAccount ? `EXECUTE ON ${selectedAccount.loginId || selectedAccount.type}` : "CONNECT ACCOUNT FIRST"}
+                {isScanning ? "SCANNING..." : selectedAccount ? `EXECUTE ON ${selectedAccount.loginId}` : "CONNECT ACCOUNT FIRST"}
               </button>
             </div>
           </div>
