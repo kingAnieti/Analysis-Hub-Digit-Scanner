@@ -1,13 +1,26 @@
 import React, { useState, useEffect, useRef } from "react";
 
-// REPLACE WITH YOUR REAL DERIV APP ID FROM DEVELOPERS.DERIV.COM
-const APP_ID = "34cqHOYTzkye6dCyuLelT"; 
+const APP_ID = "YOUR_REAL_APP_ID_HERE"; // Replace with your App ID from developers.deriv.com
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+
+const SYNTHETIC_MARKETS = [
+  { symbol: "R_10", name: "Volatility 10 Index" },
+  { symbol: "R_25", name: "Volatility 25 Index" },
+  { symbol: "R_50", name: "Volatility 50 Index" },
+  { symbol: "R_75", name: "Volatility 75 Index" },
+  { symbol: "R_100", name: "Volatility 100 Index" },
+];
 
 export default function App() {
   const [token, setToken] = useState(null);
   const [manualToken, setManualToken] = useState("");
   const [showTokenInput, setShowTokenInput] = useState(false);
+  const [accountType, setAccountType] = useState("demo"); // "demo" or "real"
+  
+  // Market Selection Modes: "single" or "multi"
+  const [marketMode, setMarketMode] = useState("single");
+  const [selectedMarket, setSelectedMarket] = useState("R_100");
+
   const [balance, setBalance] = useState("0.00");
   const [currency, setCurrency] = useState("USD");
   const [activeTab, setActiveTab] = useState("bulk");
@@ -24,7 +37,7 @@ export default function App() {
   
   const ws = useRef(null);
 
-  // Handle URL tokens from Deriv OAuth redirect
+  // Handle OAuth Redirect Tokens
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token1") || params.get("acct1");
@@ -39,7 +52,7 @@ export default function App() {
     }
   }, []);
 
-  // Handle WebSocket Connection and Authorization
+  // WebSocket Connection & Channel Management
   useEffect(() => {
     if (!token) return;
 
@@ -61,8 +74,16 @@ export default function App() {
         }
         setBalance(Number(data.authorize.balance).toFixed(2));
         setCurrency(data.authorize.currency);
+        
+        // Auto-detect if account token is VRTC (Demo) or Real
+        if (data.authorize.loginid && data.authorize.loginid.startsWith("VRTC")) {
+          setAccountType("demo");
+        } else {
+          setAccountType("real");
+        }
+
         ws.current.send(JSON.stringify({ balance: 1, subscribe: 1 }));
-        ws.current.send(JSON.stringify({ ticks: "R_100" }));
+        ws.current.send(JSON.stringify({ ticks: selectedMarket }));
       }
 
       if (data.msg_type === "balance") {
@@ -105,7 +126,7 @@ export default function App() {
     };
 
     return () => ws.current && ws.current.close();
-  }, [token]);
+  }, [token, selectedMarket]);
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
@@ -114,8 +135,7 @@ export default function App() {
       setShowTokenInput(true);
       return;
     }
-    const redirectUrl = encodeURIComponent(window.location.origin);
-    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=EN&platform=`;
+    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=EN`;
   };
 
   const handleSaveManualToken = () => {
@@ -136,22 +156,22 @@ export default function App() {
     setScanProgress(0);
     setTerminalLogs([]);
 
-    addLog("[INFO] Authenticating AI market matrix...");
-    addLog("[OK] Synthetic stream linked");
+    addLog(`[INFO] Operating Mode: ${accountType.toUpperCase()} Account`);
+    addLog(`[INFO] Target: ${marketMode === "single" ? `Single (${selectedMarket})` : "Multi-Synthetic Array"}`);
     
     let progress = 0;
     const interval = setInterval(() => {
       progress += 20;
       setScanProgress(progress);
       
-      if (progress === 40) addLog("[INFO] Reading volatility clusters...");
-      if (progress === 60) addLog("[WARNING] Signal pressure rising");
-      if (progress === 80) addLog("[INFO] Checking last digit sequence...");
+      if (progress === 40) addLog("[INFO] Reading volatility index stream...");
+      if (progress === 60) addLog("[WARNING] Signal pressure detected");
+      if (progress === 80) addLog("[INFO] Calibrating Over 4 / Under 6 sequence...");
 
       if (progress >= 100) {
         clearInterval(interval);
-        addLog("[OK] Pattern scanner armed for Over 4 / Under 6");
-        addLog(`[INFO] Queueing exactly ${bulkTrades} trades at once...`);
+        addLog("[OK] Strategy Armed");
+        addLog(`[INFO] Sending ${bulkTrades} bulk trades...`);
         
         setTimeout(() => {
           setIsScanning(false);
@@ -159,7 +179,7 @@ export default function App() {
           executeBulkOrders();
         }, 800);
       }
-    }, 500);
+    }, 400);
   };
 
   const executeBulkOrders = () => {
@@ -167,6 +187,11 @@ export default function App() {
     setTrades([]);
 
     for (let i = 0; i < bulkTrades; i++) {
+      // Pick dynamic target symbol if multi-synthetic mode is active
+      const targetSymbol = marketMode === "multi" 
+        ? SYNTHETIC_MARKETS[i % SYNTHETIC_MARKETS.length].symbol 
+        : selectedMarket;
+
       setTimeout(() => {
         if (ws.current && ws.current.readyState === WebSocket.OPEN) {
           ws.current.send(
@@ -177,7 +202,7 @@ export default function App() {
                 amount: Number(stake),
                 basis: "stake",
                 contract_type: "DIGITUNDER",
-                symbol: "R_100",
+                symbol: targetSymbol,
                 barrier: "6",
                 duration: 1,
                 duration_unit: "t",
@@ -194,7 +219,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0b0e] text-white font-sans flex flex-col justify-between selection:bg-cyan-500 selection:text-black">
-      {/* Top Header */}
+      {/* Top Main Navigation Header */}
       <header className="flex justify-between items-center px-4 py-3 bg-[#111318] border-b border-cyan-900/40 shadow-lg shadow-cyan-950/20">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-black text-sm tracking-tighter shadow-md shadow-cyan-500/20">
@@ -206,13 +231,32 @@ export default function App() {
           </div>
         </div>
 
+        {/* Demo / Real Account Switcher & Balance Container */}
         {token ? (
-          <div className="flex items-center gap-2 bg-[#161922] px-3 py-1.5 rounded-full border border-neutral-800">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <span className="text-xs font-mono font-bold text-green-400">
-              ${balance} <span className="text-neutral-500">{currency}</span>
-            </span>
-            <button onClick={handleDisconnect} className="ml-2 text-[10px] text-red-400 hover:underline">Exit</button>
+          <div className="flex items-center gap-2">
+            {/* Account Type Badge */}
+            <div className="flex bg-[#181c26] p-1 rounded-lg border border-neutral-800 text-[10px] font-bold font-mono">
+              <button
+                onClick={() => setAccountType("demo")}
+                className={`px-2 py-0.5 rounded transition ${accountType === "demo" ? "bg-amber-500 text-black" : "text-neutral-400 hover:text-white"}`}
+              >
+                DEMO
+              </button>
+              <button
+                onClick={() => setAccountType("real")}
+                className={`px-2 py-0.5 rounded transition ${accountType === "real" ? "bg-green-500 text-black" : "text-neutral-400 hover:text-white"}`}
+              >
+                REAL
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 bg-[#161922] px-3 py-1.5 rounded-full border border-neutral-800">
+              <span className={`w-2 h-2 rounded-full ${accountType === "demo" ? "bg-amber-400" : "bg-green-500"} animate-pulse`}></span>
+              <span className="text-xs font-mono font-bold text-white">
+                ${balance} <span className="text-neutral-500">{currency}</span>
+              </span>
+              <button onClick={handleDisconnect} className="ml-1 text-[10px] text-red-400 hover:underline">Exit</button>
+            </div>
           </div>
         ) : (
           <div className="flex gap-2">
@@ -220,13 +264,13 @@ export default function App() {
               TOKEN
             </button>
             <button onClick={handleDerivLogin} className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 px-4 py-1.5 rounded text-xs font-bold shadow-lg shadow-red-950/50 transition">
-              CONNECT DERIV
+              CONNECT
             </button>
           </div>
         )}
       </header>
 
-      {/* Navigation Sub-Header */}
+      {/* Sub-Header Tabs */}
       <nav className="flex bg-[#111318] border-b border-neutral-800/80 text-xs font-semibold">
         {["Quick strategy", "Bulk Trader", "Manual Trader", "Copy Trading"].map((tab) => (
           <button
@@ -243,19 +287,53 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Main Area */}
+      {/* Main Workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
-        <div className="bg-[#12151c] border border-neutral-800 rounded-xl p-3 flex justify-between items-center shadow-inner">
-          <div>
-            <p className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">Market Symbol</p>
-            <p className="text-xs font-bold text-cyan-400">Volatility 100 Index</p>
+        {/* Market Selection Control Box */}
+        <div className="bg-[#12151c] border border-neutral-800 rounded-xl p-3 space-y-2">
+          <div className="flex justify-between items-center text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+            <span>Market Configuration</span>
+            <div className="flex bg-[#181c26] p-0.5 rounded border border-neutral-800 font-mono">
+              <button
+                onClick={() => setMarketMode("single")}
+                className={`px-2 py-0.5 rounded ${marketMode === "single" ? "bg-cyan-500 text-black font-bold" : "text-neutral-400"}`}
+              >
+                SINGLE
+              </button>
+              <button
+                onClick={() => setMarketMode("multi")}
+                className={`px-2 py-0.5 rounded ${marketMode === "multi" ? "bg-cyan-500 text-black font-bold" : "text-neutral-400"}`}
+              >
+                MULTI-ARRAY
+              </button>
+            </div>
           </div>
-          <div className="text-right">
-            <p className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">Current Tick</p>
-            <p className="text-sm font-mono font-black text-white">{lastTick}</p>
+
+          <div className="flex justify-between items-center pt-1">
+            {marketMode === "single" ? (
+              <select
+                value={selectedMarket}
+                onChange={(e) => setSelectedMarket(e.target.value)}
+                className="bg-[#181c26] border border-neutral-800 text-cyan-400 text-xs font-bold rounded-lg p-2 focus:outline-none focus:border-cyan-400"
+              >
+                {SYNTHETIC_MARKETS.map((m) => (
+                  <option key={m.symbol} value={m.symbol}>{m.name}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="text-xs text-cyan-400 font-mono font-bold">
+                Multi-Array Active (V10 ➔ V100)
+              </div>
+            )}
+
+            <div className="text-right">
+              <p className="text-[10px] uppercase font-bold text-neutral-400">Current Tick</p>
+              <p className="text-sm font-mono font-black text-white">{lastTick}</p>
+            </div>
           </div>
         </div>
 
+        {/* AI Trigger Scanner Drawer */}
         <button
           onClick={() => setIsScannerOpen(true)}
           className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-black py-3.5 rounded-xl text-sm tracking-wider shadow-lg shadow-cyan-500/20 active:scale-[0.99] transition flex items-center justify-center gap-2"
@@ -264,7 +342,7 @@ export default function App() {
           AI SCANNER & BULK TRADER
         </button>
 
-        {/* Transactions Feed */}
+        {/* Order History Display Table */}
         <div className="flex-1 bg-[#12151c] border border-neutral-800 rounded-xl p-3 flex flex-col justify-between min-h-[300px]">
           <div className="flex justify-between items-center border-b border-neutral-800 pb-2 mb-2">
             <span className="text-xs font-bold text-neutral-300">Transactions</span>
@@ -290,7 +368,7 @@ export default function App() {
             )}
           </div>
 
-          {/* Metric Bar */}
+          {/* Session Metrics Bar */}
           <div className="grid grid-cols-4 gap-1 pt-3 border-t border-neutral-800 mt-2 text-center text-[10px] font-mono">
             <div className="bg-[#181c26] p-2 rounded-lg">
               <p className="text-neutral-500">Total Stake</p>
@@ -314,17 +392,17 @@ export default function App() {
         </div>
       </main>
 
-      {/* Manual Token Fallback Modal */}
+      {/* Manual Token Overlay Modal */}
       {showTokenInput && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-[#12151c] border border-cyan-500/50 rounded-2xl max-w-xs w-full p-5 space-y-3 font-mono">
             <h3 className="text-xs font-bold text-cyan-400">ENTER DERIV API TOKEN</h3>
             <p className="text-[10px] text-neutral-400">
-              Go to Deriv $\rightarrow$ Settings $\rightarrow$ API Token. Create a token with <b>Read</b> and <b>Trade</b> scope, then paste it below:
+              Create an API token in Deriv Account Settings with <b>Read</b> and <b>Trade</b> scope:
             </p>
             <input
               type="text"
-              placeholder="Paste token here..."
+              placeholder="Paste API token..."
               value={manualToken}
               onChange={(e) => setManualToken(e.target.value)}
               className="w-full bg-[#181c26] border border-neutral-800 p-2.5 rounded-lg text-xs text-green-400 focus:outline-none focus:border-cyan-400"
@@ -337,7 +415,7 @@ export default function App() {
         </div>
       )}
 
-      {/* AI Scanner Modal */}
+      {/* Matrix Scanner Drawer */}
       {isScannerOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="bg-[#0b0d12] border border-cyan-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl shadow-cyan-950/50 relative font-mono">
@@ -346,14 +424,14 @@ export default function App() {
                 <span className="w-2 h-2 rounded-full bg-red-500"></span>
                 <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
                 <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                <h3 className="text-cyan-400 text-xs font-bold tracking-widest ml-2 uppercase">AI MARKET MATRIX</h3>
+                <h3 className="text-cyan-400 text-xs font-bold tracking-widest ml-2 uppercase">AI MATRIX SCANNER</h3>
               </div>
               <button onClick={() => setIsScannerOpen(false)} className="text-neutral-500 hover:text-red-400 font-bold text-sm">✕</button>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="block text-[10px] text-neutral-400 uppercase mb-1">STAKE ($)</label>
+                <label className="block text-[10px] text-neutral-400 uppercase mb-1">STAKE AMOUNT ($)</label>
                 <input
                   type="number"
                   value={stake}
@@ -362,7 +440,7 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-neutral-400 uppercase mb-1">BULK TRADES</label>
+                <label className="block text-[10px] text-neutral-400 uppercase mb-1">BULK ORDERS QUEUED</label>
                 <input
                   type="number"
                   value={bulkTrades}
@@ -371,13 +449,14 @@ export default function App() {
                 />
               </div>
 
+              {/* Real-time Terminal Log Window */}
               <div className="bg-black/90 border border-neutral-800 p-3 rounded-xl h-24 overflow-y-auto text-[10px] text-green-400 space-y-1">
-                {terminalLogs.length === 0 ? <p className="text-neutral-600">Waiting for scan initiation...</p> : terminalLogs.map((l, i) => <p key={i}>{l}</p>)}
+                {terminalLogs.length === 0 ? <p className="text-neutral-600">Waiting for matrix initiation...</p> : terminalLogs.map((l, i) => <p key={i}>{l}</p>)}
               </div>
 
               <div>
                 <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                  <span>SCANNING STATUS</span>
+                  <span>MATRIX SCAN PROGRESS</span>
                   <span className="text-cyan-400 font-bold">{scanProgress}%</span>
                 </div>
                 <div className="w-full bg-neutral-900 h-1.5 rounded-full overflow-hidden">
@@ -390,7 +469,7 @@ export default function App() {
                 disabled={isScanning || !token}
                 className="w-full bg-cyan-400 hover:bg-cyan-300 text-black font-black py-3 rounded-xl text-xs mt-2"
               >
-                {isScanning ? "SCANNING..." : token ? "SCAN & EXECUTE TRADES" : "PLEASE CONNECT TOKEN FIRST"}
+                {isScanning ? "SCANNING..." : token ? `SCAN & EXECUTE (${accountType.toUpperCase()})` : "AUTHENTICATE FIRST"}
               </button>
             </div>
           </div>
@@ -401,7 +480,7 @@ export default function App() {
       {showSummaryModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-[#12151c] border border-cyan-500/40 rounded-2xl p-6 max-w-xs w-full text-center space-y-3">
-            <h4 className="text-[10px] text-cyan-400 tracking-widest uppercase font-bold">Session Complete</h4>
+            <h4 className="text-[10px] text-cyan-400 tracking-widest uppercase font-bold">Execution Finished</h4>
             <p className="text-xs text-neutral-400">Total Profit</p>
             <p className={`text-3xl font-black font-mono ${summary.totalProfit >= 0 ? "text-green-400" : "text-red-400"}`}>
               {summary.totalProfit >= 0 ? `+${summary.totalProfit.toFixed(2)}` : summary.totalProfit.toFixed(2)} USD
