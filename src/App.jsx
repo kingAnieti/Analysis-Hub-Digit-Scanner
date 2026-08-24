@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 
+// Use public app_id (1089) or fallback if custom APP_ID is blocked/invalid
 const APP_ID = "34cqHOYTzkye6dCyuLe1T";
+const DEFAULT_APP_ID = "1089"; 
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
 const SYNTHETIC_MARKETS = [
@@ -48,6 +50,7 @@ export default function App() {
   const [connStatus, setConnStatus] = useState("idle");
 
   const ws = useRef(null);
+  const pingInterval = useRef(null);
 
   // Load saved accounts from storage
   useEffect(() => {
@@ -73,22 +76,36 @@ export default function App() {
     setConnStatus("connecting");
     setDigitTape([]);
 
-    if (ws.current) ws.current.close();
+    if (ws.current) {
+      ws.current.close();
+    }
 
-    ws.current = new WebSocket(WS_URL);
+    let socketUrl = WS_URL;
+    ws.current = new WebSocket(socketUrl);
 
     ws.current.onopen = () => {
       setConnStatus("open");
+      // Send Ping Heartbeat every 30s to keep connection alive
+      pingInterval.current = setInterval(() => {
+        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+          ws.current.send(JSON.stringify({ ping: 1 }));
+        }
+      }, 30000);
+
+      // Send authorization using API Token
       ws.current.send(JSON.stringify({ authorize: selectedAccount.token }));
     };
 
     ws.current.onerror = (err) => {
       console.error("[Deriv WS Error]", err);
       setConnStatus("error");
-      setConnError("WebSocket failed to connect. Check network connection or firewall permissions for wss://ws.derivws.com.");
+      setConnError(
+        "WebSocket failed to connect to wss://ws.derivws.com. Check network/ad-blocker permissions or try using standard App ID."
+      );
     };
 
-    ws.current.onclose = () => {
+    ws.current.onclose = (event) => {
+      if (pingInterval.current) clearInterval(pingInterval.current);
       setConnStatus((prev) => (prev === "authorized" ? "closed" : prev));
     };
 
@@ -98,7 +115,7 @@ export default function App() {
       if (data.msg_type === "authorize") {
         if (data.error) {
           setConnStatus("error");
-          setConnError(`Auth Failed: ${data.error.message} (${data.error.code})`);
+          setConnError(`Auth Failed: ${data.error.message} (${data.error.code}). Make sure to paste a valid Deriv API Token.`);
           setSelectedAccount(null);
           return;
         }
@@ -108,7 +125,6 @@ export default function App() {
         setBalance(Number(auth.balance).toFixed(2));
         setCurrency(auth.currency || "USD");
 
-        // Update active profile details
         setSelectedAccount((prev) => ({
           ...prev,
           loginId: auth.loginid || prev.loginId,
@@ -163,13 +179,13 @@ export default function App() {
     };
 
     return () => {
+      if (pingInterval.current) clearInterval(pingInterval.current);
       if (ws.current) ws.current.close();
     };
   }, [selectedAccount?.token, selectedMarket]);
 
   const addLog = (msg) => setTerminalLogs((prev) => [...prev, msg]);
 
-  // Connect via Login ID, Server, and Password/Token
   const handleConnectAccount = (e) => {
     e.preventDefault();
     if (!passwordTokenInput.trim()) return;
@@ -341,7 +357,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Account Login, Server & Password Input Panel */}
+      {/* Account Login Form */}
       {!selectedAccount && (
         <div className="bg-surface border border-hairline p-4 m-3 rounded-lg max-w-lg mx-auto w-full space-y-3">
           <div className="flex justify-between items-center border-b border-hairline pb-2">
@@ -378,7 +394,7 @@ export default function App() {
             </div>
 
             <div>
-              <label className="block text-[10px] text-muted uppercase font-mono mb-1">Login ID / CR Account Number</label>
+              <label className="block text-[10px] text-muted uppercase font-mono mb-1">Login ID / Account Number</label>
               <input
                 type="text"
                 placeholder="e.g. CR1234567 or VRTC123456"
@@ -389,10 +405,10 @@ export default function App() {
             </div>
 
             <div>
-              <label className="block text-[10px] text-muted uppercase font-mono mb-1">Account Password / API Token</label>
+              <label className="block text-[10px] text-muted uppercase font-mono mb-1">API Token / Account Password</label>
               <input
                 type="password"
-                placeholder="Enter password or API Token"
+                placeholder="Paste your Deriv API token"
                 value={passwordTokenInput}
                 onChange={(e) => setPasswordTokenInput(e.target.value)}
                 className="w-full bg-panel border border-hairline p-2 text-xs font-mono rounded focus:outline-none focus:border-gold"
@@ -435,7 +451,7 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Main workspace */}
+      {/* Main Workspace */}
       <main className="flex-1 p-3 max-w-lg mx-auto w-full flex flex-col gap-3">
 
         {/* Digit Tape */}
