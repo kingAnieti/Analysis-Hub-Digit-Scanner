@@ -3,23 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Deriv Analysis Hub - AI Market Matrix</title>
+    <title>Digit Tape Terminal — Deriv Analysis Hub</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;700&family=Inter:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
 
     <!-- Tailwind Play CDN (Forces Instant Styling) -->
     <script src="https://cdn.tailwindcss.com"></script>
 
     <script>
-      // Configure Custom Theme Colors for Tailwind CDN
+      // Custom design tokens — see design brief for rationale
       tailwind.config = {
         theme: {
           extend: {
             colors: {
-              cyan: {
-                300: '#67e8f9',
-                400: '#00f0ff',
-                500: '#00d8e6',
-                600: '#0891b2',
-              }
+              void: '#0B0C0F',
+              surface: '#15171C',
+              panel: '#1B1E24',
+              hairline: '#262A33',
+              ink: '#EDEBE6',
+              muted: '#8B8F99',
+              gold: '#D4A72C',
+              'gold-bright': '#F0C34D',
+              amber: '#D4A72C',
+              win: '#3ECF8E',
+              loss: '#E5484D',
+            },
+            fontFamily: {
+              display: ['"Space Grotesk"', 'sans-serif'],
+              mono: ['"IBM Plex Mono"', 'monospace'],
+              sans: ['Inter', 'sans-serif'],
             }
           }
         }
@@ -34,20 +51,25 @@
       .animate-fade-in {
         animation: fadeIn 0.2s ease-out forwards;
       }
-      /* Ensure scrollbars stay dark */
       ::-webkit-scrollbar {
         width: 6px;
       }
       ::-webkit-scrollbar-track {
-        background: #0d0e12;
+        background: #0B0C0F;
       }
       ::-webkit-scrollbar-thumb {
-        background: #1f2430;
+        background: #262A33;
         border-radius: 3px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
   </head>
-  <body class="bg-[#0a0b0e] text-white antialiased selection:bg-cyan-500 selection:text-black min-h-screen">
+  <body class="bg-void text-ink antialiased selection:bg-gold selection:text-void min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
