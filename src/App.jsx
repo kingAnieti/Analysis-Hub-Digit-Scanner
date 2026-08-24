@@ -36,6 +36,8 @@ export default function App() {
   const [summary, setSummary] = useState({ totalStake: 0, payout: 0, won: 0, lost: 0, totalProfit: 0 });
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [lastTick, setLastTick] = useState("0.00");
+  const [connError, setConnError] = useState("");
+  const [connStatus, setConnStatus] = useState("idle"); // idle | connecting | open | authorized | closed | error
 
   const ws = useRef(null);
 
@@ -55,22 +57,50 @@ export default function App() {
   useEffect(() => {
     if (!selectedAccount?.token) return;
 
+    setConnError("");
+    setConnStatus("connecting");
+    console.log("[Deriv] Opening WebSocket:", WS_URL);
+
     ws.current = new WebSocket(WS_URL);
 
     ws.current.onopen = () => {
+      console.log("[Deriv] Socket opened, sending authorize...");
+      setConnStatus("open");
       // Authorize session token
       ws.current.send(JSON.stringify({ authorize: selectedAccount.token }));
     };
 
+    ws.current.onerror = (err) => {
+      console.error("[Deriv] WebSocket error:", err);
+      setConnStatus("error");
+      setConnError(
+        "WebSocket failed to connect. This is usually a network/firewall/ad-blocker issue blocking wss://ws.derivws.com, not a token problem."
+      );
+    };
+
+    ws.current.onclose = (event) => {
+      console.warn("[Deriv] WebSocket closed:", event.code, event.reason);
+      if (connStatus !== "authorized") {
+        setConnStatus("closed");
+      }
+    };
+
     ws.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      console.log("[Deriv] Received:", data.msg_type, data);
 
       if (data.msg_type === "authorize") {
         if (data.error) {
-          alert(`Auth Failed: ${data.error.message}`);
+          console.error("[Deriv] Auth failed:", data.error);
+          setConnStatus("error");
+          setConnError(
+            `Auth failed: ${data.error.message} (code: ${data.error.code}). ` +
+            `Double-check you pasted a personal API token from app.deriv.com → Account Settings → API token — not the App ID from the Deriv API developer portal.`
+          );
           setSelectedAccount(null);
           return;
         }
+        setConnStatus("authorized");
 
         // Populate real/demo account details from Deriv WebSocket
         const auth = data.authorize;
@@ -283,7 +313,12 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <span className="text-xs text-amber-400 font-mono">Disconnected</span>
+            <span className="text-xs text-amber-400 font-mono">
+              {connStatus === "connecting" && "Connecting..."}
+              {connStatus === "open" && "Authorizing..."}
+              {(connStatus === "idle" || connStatus === "closed") && "Disconnected"}
+              {connStatus === "error" && "Connection Error"}
+            </span>
           )}
         </div>
       </header>
@@ -308,7 +343,7 @@ export default function App() {
 
             <input
               type="text"
-              placeholder="Paste Deriv API Token (e.g., 34cqHOYTzk...)"
+              placeholder="Paste your personal API token from app.deriv.com → Settings → API token"
               value={tokenInput}
               onChange={(e) => setTokenInput(e.target.value)}
               className="flex-1 bg-[#181c26] border border-neutral-800 p-2 text-xs font-mono rounded-lg focus:outline-none focus:border-cyan-500"
@@ -321,6 +356,28 @@ export default function App() {
               CONNECT
             </button>
           </form>
+
+          <p className="text-[10px] text-neutral-500">
+            Get this token at{" "}
+            <a
+              href="https://app.deriv.com/account/api-token"
+              target="_blank"
+              rel="noreferrer"
+              className="text-cyan-400 underline"
+            >
+              app.deriv.com/account/api-token
+            </a>{" "}
+            — check the "Trade" scope when you create it. This is different from the App ID/App Secret in the developer portal.
+          </p>
+        </div>
+      )}
+
+      {connError && (
+        <div className="bg-red-950/40 border border-red-500/40 text-red-300 text-xs p-3 m-3 rounded-xl max-w-lg mx-auto w-full font-mono">
+          <div className="flex justify-between items-start gap-2">
+            <span>⚠ {connError}</span>
+            <button onClick={() => setConnError("")} className="text-red-400 shrink-0">✕</button>
+          </div>
         </div>
       )}
 
